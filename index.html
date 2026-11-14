@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pierogi na czas</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #24170f; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; object-fit: contain; }
+</style>
+</head>
+<body>
+<canvas id="game" width="1280" height="720"></canvas>
+<script>
+(() => {
+'use strict';
+
+// ---------------------------------------------------------------- stałe
+const W = 1280, H = 720;
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+const ROUND_TIME = 180;          // sekundy
+const SPEED = 290;               // px/s
+const REACH = 85;                // zasięg akcji przy stacji
+const LEP_PRESSES = 12;          // ile naprzemiennych wciśnięć LB/RB
+const POT_SIZE = 3;
+const COOK_MIN = 4, PERFECT_FROM = 5.5, PERFECT_TO = 7.5, COOK_OVER = 10;
+const FLOOR = { x0: 50, y0: 120, x1: 1230, y1: 630 };
+const CAT_DOOR = { x: 640, y: 128 };
+const UNCLE_DOOR = { x: 1010, y: 622 };
+
+const ST = {
+  dough:  { x: 130,  y: 230, label: 'CIASTO' },
+  farsz:  { x: 130,  y: 520, label: 'FARSZ' },
+  board1: { x: 480,  y: 230, label: 'STOLNICA' },
+  board2: { x: 480,  y: 520, label: 'STOLNICA' },
+  pot:    { x: 860,  y: 375, label: 'GARNEK' },
+  plate:  { x: 1160, y: 375, label: 'STÓŁ' },
+};
+
+const PLAYER_STYLE = [
+  { name: 'Gracz 1', color: '#3b82c4', face: '👦' },
+  { name: 'Gracz 2', color: '#d6457a', face: '👧' },
+];
+
+const GRANNY = {
+  title:   ['Goście za 3 minuty, a pierogów ani widu!'],
+  start:   ['No, do roboty! Samo się nie ulepi!', 'Ręce umyte? To lepimy!'],
+  serve:   ['No, wreszcie coś na stole.', 'Jeszcze, jeszcze!', 'Tak trzymać, dzieci.', 'Ciocia Krysia zje ze dwadzieścia.'],
+  perfect: ['Idealny! Jak moje!', 'O, ten to jak z obrazka!', 'Palce lizać!'],
+  combo:   ['Ale tempo! Po babci to macie!', 'Fabryka pierogów, proszę ja ciebie!'],
+  drop:    ['Na podłogę?! Za moich czasów…', 'Jedzenia się nie rzuca! No, chyba że celnie.', 'Kto to teraz posprząta?'],
+  over:    ['Rozgotowany! Klej, nie pieróg!', 'To już zupa, nie pierogi.'],
+  cat:     ['Mruczek! Zostaw ten farsz!', 'Kota pilnować, nie gapić się!'],
+  catGone: ['A sio, darmozjadzie!'],
+  kipi:    ['KIPI! Garnek kipi!', 'Jezus Maria, kuchenka!'],
+  kipiBad: ['No i wykipiało. Wszystko rozgotowane.'],
+  uncle:   ['Zbyszek! To dla gości!', 'Wujka omijać szerokim łukiem!'],
+  uncleIn: ['O, Zbyszek przyszedł „tylko spróbować”…'],
+  steal:   ['Nie bijcie się, dla każdego starczy!', 'Ej! Współpraca, a nie podbieranie!'],
+  flour:   ['Uwaga, mąka na podłodze!', 'Ślisko jak na lodowisku!'],
+  slip:    ['Powoli, bo się zabijesz!'],
+  trick:   ['Rzut za trzy! Ale w domu się nie rzuca.'],
+  idle:    ['Za moich czasów to się lepiło 200 na godzinę.', 'Farszu nie żałować!', 'Ciasto cienko, ale nie za cienko.', 'Kto to widział, tak wolno…'],
+  last:    ['Ostatnie 30 sekund! Goście już parkują!'],
+};
+
+// ---------------------------------------------------------------- pomocnicze
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// ---------------------------------------------------------------- dźwięk
+let AC = null;
+function audioInit() {
+  try {
+    if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+    if (AC.state === 'suspended') AC.resume().catch(() => {});
+  } catch (e) { /* brak dźwięku to nie tragedia */ }
+}
+function beep(freq, dur = 0.08, type = 'square', vol = 0.05) {
+  if (!AC || AC.state !== 'running') return;
+  try {
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.value = vol;
+    g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + dur);
+    o.connect(g); g.connect(AC.destination);
+    o.start(); o.stop(AC.currentTime + dur);
+  } catch (e) { /* ignoruj */ }
+}
+
+// ---------------------------------------------------------------- wejście
+const keys = {};
+let startRequested = false;
+const KB = [
+  { up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD', a: 'KeyF', x: 'KeyG', l: 'KeyQ', r: 'KeyE' },
+  { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', a: 'KeyK', x: 'KeyL', l: 'KeyI', r: 'KeyO' },
+];
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Enter') startRequested = true;
+  if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
+  audioInit();
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+window.addEventListener('pointerdown', audioInit);
+canvas.addEventListener('dblclick', () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else if (canvas.requestFullscreen) canvas.requestFullscreen().catch(() => {});
+});
+
+function getPads() {
+  if (!navigator.getGamepads) return [];
+  return Array.from(navigator.getGamepads()).filter(p => p && p.connected);
+}
+
+const prevBtn = [{}, {}];
+function readInput(i) {
+  const pad = getPads()[i];
+  const k = KB[i];
+  let mx = 0, my = 0, a = false, x = false, l = false, r = false, start = false;
+  if (pad) {
+    const b = n => !!(pad.buttons[n] && pad.buttons[n].pressed);
+    mx = pad.axes[0] || 0; my = pad.axes[1] || 0;
+    if (Math.hypot(mx, my) < 0.25) { mx = 0; my = 0; }
+    if (b(14)) mx = -1; if (b(15)) mx = 1;
+    if (b(12)) my = -1; if (b(13)) my = 1;
+    a = b(0); x = b(2) || b(1); l = b(4) || b(6); r = b(5) || b(7); start = b(9);
+  }
+  if (keys[k.left]) mx = -1; if (keys[k.right]) mx = 1;
+  if (keys[k.up]) my = -1; if (keys[k.down]) my = 1;
+  a = a || !!keys[k.a]; x = x || !!keys[k.x]; l = l || !!keys[k.l]; r = r || !!keys[k.r];
+  const len = Math.hypot(mx, my);
+  if (len > 1) { mx /= len; my /= len; }
+  const pr = prevBtn[i];
+  const out = { mx, my, a: a && !pr.a, x: x && !pr.x, l: l && !pr.l, r: r && !pr.r, start: start && !pr.start };
+  prevBtn[i] = { a, x, l, r, start };
+  return out;
+}
+
+// ---------------------------------------------------------------- stan gry
+let S = null;
+
+function mkPlayer(i) {
+  return {
+    i, x: i === 0 ? 300 : 680, y: 375, vx: 0, vy: 0, fx: i === 0 ? 1 : -1, fy: 0,
+    hold: null, lock: null, slide: 0, slideCd: 0, score: 0,
+    name: PLAYER_STYLE[i].name, color: PLAYER_STYLE[i].color, face: PLAYER_STYLE[i].face,
+  };
+}
+
+function newGame(phase) {
+  S = {
+    phase: phase || 'title', t: 0, time: ROUND_TIME, countdown: 3, endT: 0,
+    score: 0, streak: 0, lastWarned: false, idleT: rand(14, 22),
+    stats: { served: 0, perfect: 0, dropped: 0, over: 0, cat: 0, uncle: 0, stolen: 0 },
+    players: [mkPlayer(0), mkPlayer(1)],
+    boards: [
+      { st: ST.board1, user: null, progress: 0, next: null },
+      { st: ST.board2, user: null, progress: 0, next: null },
+    ],
+    pot: { items: [], kipi: false, kipiT: 0, nextKipi: rand(25, 38) },
+    cat: { state: 'away', x: CAT_DOOR.x, y: CAT_DOOR.y, timer: rand(10, 16), eatT: 0 },
+    uncle: { state: 'away', x: UNCLE_DOOR.x, y: UNCLE_DOOR.y, timer: rand(30, 40), stay: 0, wx: 800, wy: 400, wt: 0 },
+    flour: [], nextFlour: rand(15, 24),
+    shots: [], floats: [],
+    granny: { text: pick(GRANNY.title), t: 9999 },
+  };
+}
+
+function say(key, chance = 1) {
+  if (Math.random() > chance) return;
+  S.granny.text = pick(GRANNY[key]);
+  S.granny.t = 3.5;
+}
+
+function float(text, x, y, color = '#fff', size = 24) {
+  S.floats.push({ text, x, y, color, size, t: 0 });
+}
+
+function multiplier() { return S.streak >= 6 ? 3 : S.streak >= 3 ? 2 : 1; }
+
+function penalty(pts, who, text, x, y) {
+  S.score -= pts;
+  if (who) who.score -= pts;
+  S.streak = 0;
+  float(`${text} −${pts}`, x, y, '#ff5a4d', 26);
+  beep(140, 0.25, 'sawtooth', 0.06);
+}
+
+function serve(p, item, bonus) {
+  const base = (item.q === 'perfect' ? 15 : 10) + (bonus || 0);
+  S.streak++;
+  const m = multiplier();
+  const pts = base * m;
+  S.score += pts; p.score += pts;
+  S.stats.served++;
+  if (item.q === 'perfect') S.stats.perfect++;
+  float(`+${pts}${m > 1 ? ' (x' + m + ')' : ''}`, ST.plate.x, ST.plate.y - 70, item.q === 'perfect' ? '#ffd54a' : '#9cf07a', 30);
+  beep(660, 0.08); setTimeout(() => beep(880, 0.12), 80);
+  if (S.streak === 3 || S.streak === 6) say('combo');
+  else if (item.q === 'perfect') say('perfect', 0.6);
+  else say('serve', 0.35);
+}
+
+// ---------------------------------------------------------------- akcje gracza
+function nearestStation(p) {
+  let best = null, bd = REACH;
+  for (const key in ST) {
+    const d = dist(p, ST[key]);
+    if (d < bd) { bd = d; best = key; }
+  }
+  return best;
+}
+
+function stationAction(p, key) {
+  const st = ST[key];
+  const hint = msg => float(msg, st.x, st.y - 70, '#ffe9b0', 20);
+  if (key === 'dough') {
+    if (p.hold) return false;
+    p.hold = { type: 'dough' }; beep(320, 0.05); return true;
+  }
+  if (key === 'farsz') {
+    if (!p.hold || p.hold.type !== 'dough') { if (!p.hold) hint('Najpierw ciasto!'); return !p.hold; }
+    if (S.cat.state === 'eating') { hint('Kot w farszu!'); return true; }
+    p.hold = { type: 'filled' }; beep(380, 0.05); return true;
+  }
+  if (key === 'board1' || key === 'board2') {
+    const b = S.boards[key === 'board1' ? 0 : 1];
+    if (!p.hold) return false;
+    if (p.hold.type !== 'filled') { if (p.hold.type === 'dough') hint('Bez farszu?!'); return p.hold.type === 'dough'; }
+    if (b.user) { hint('Zajęte!'); return true; }
+    b.user = p; b.progress = 0; b.next = null;
+    p.lock = b; p.hold = null; p.x = st.x; p.y = st.y + 58; p.vx = p.vy = 0;
+    return true;
+  }
+  if (key === 'pot') {
+    const pot = S.pot;
+    if (pot.kipi) {
+      pot.kipi = false; pot.nextKipi = rand(22, 36);
+      float('Uff, zmniejszone!', st.x, st.y - 80, '#9cf07a'); beep(500, 0.1);
+      return true;
+    }
+    if (p.hold && p.hold.type === 'raw') {
+      if (pot.items.length >= POT_SIZE) { hint('Garnek pełny!'); return true; }
+      pot.items.push({ t: 0 }); p.hold = null; beep(260, 0.08, 'sine', 0.08);
+      return true;
+    }
+    if (!p.hold) {
+      if (!pot.items.length) return false;
+      const it = pot.items[0];
+      if (it.t < COOK_MIN) { hint('Jeszcze surowe!'); return true; }
+      pot.items.shift();
+      if (it.t > COOK_OVER) {
+        S.stats.over++;
+        penalty(5, null, 'Rozgotowany!', st.x, st.y - 80);
+        say('over', 0.7);
+      } else {
+        const q = (it.t >= PERFECT_FROM && it.t <= PERFECT_TO) ? 'perfect' : 'ok';
+        p.hold = { type: 'cooked', q };
+        if (q === 'perfect') float('IDEALNY!', st.x, st.y - 80, '#ffd54a', 26);
+        beep(440, 0.06);
+      }
+      return true;
+    }
+    return false;
+  }
+  if (key === 'plate') {
+    if (!p.hold || p.hold.type !== 'cooked') { if (p.hold) hint('Tylko ugotowane!'); return !!p.hold; }
+    const item = p.hold; p.hold = null;
+    serve(p, item, 0);
+    return true;
+  }
+  return false;
+}
+
+function doAction(p) {
+  if (p.lock) return;
+  const cat = S.cat;
+  if ((cat.state === 'coming' || cat.state === 'eating') && dist(p, cat) < 95) {
+    cat.state = 'fleeing';
+    float('A sio!', cat.x, cat.y - 40, '#fff', 26);
+    beep(900, 0.06); say('catGone', 0.5);
+    return;
+  }
+  const key = nearestStation(p);
+  if (key && stationAction(p, key)) return;
+  const other = S.players[1 - p.i];
+  if (!p.hold && other.hold && !other.lock && dist(p, other) < 66) {
+    p.hold = other.hold; other.hold = null;
+    S.stats.stolen++;
+    float('Moje!', p.x, p.y - 60, p.color, 24);
+    beep(700, 0.05); say('steal', 0.5);
+  }
+}
+
+function doThrow(p) {
+  if (p.lock || !p.hold) return;
+  S.shots.push({ item: p.hold, x: p.x, y: p.y, vx: p.fx * 560, vy: p.fy * 560, t: 0, life: 0.65, from: p });
+  p.hold = null;
+  beep(520, 0.05, 'triangle', 0.06);
+}
+
+function landShot(s) {
+  const type = s.item.type;
+  if (type === 'raw' && dist(s, ST.pot) < 75 && S.pot.items.length < POT_SIZE) {
+    S.pot.items.push({ t: 0 });
+    float('Chlup! Trafiony!', ST.pot.x, ST.pot.y - 80, '#9cf07a');
+    beep(260, 0.08, 'sine', 0.08);
+    return;
+  }
+  if (type === 'cooked' && dist(s, ST.plate) < 80) {
+    float('RZUT ZA TRZY! +5', ST.plate.x, ST.plate.y - 105, '#ffd54a', 26);
+    serve(s.from, s.item, 5);
+    say('trick');
+    return;
+  }
+  if (type === 'dough' || type === 'filled') {
+    S.flour.push({ x: s.x, y: s.y, r: 42, ttl: 16 });
+    float('Plask!', s.x, s.y - 30, '#fff');
+    beep(180, 0.1, 'sawtooth');
+    return;
+  }
+  S.stats.dropped++;
+  penalty(5, s.from, 'Na podłogę!', s.x, s.y - 30);
+  say('drop', 0.8);
+}
+
+// ---------------------------------------------------------------- aktualizacja
+function moveTowards(o, tx, ty, speed, dt) {
+  const d = Math.hypot(tx - o.x, ty - o.y);
+  if (d <= speed * dt) { o.x = tx; o.y = ty; return true; }
+  o.x += (tx - o.x) / d * speed * dt;
+  o.y += (ty - o.y) / d * speed * dt;
+  return false;
+}
+
+function updatePlayer(p, inp, dt) {
+  if (p.lock) {
+    const b = p.lock;
+    let hit = false;
+    if (inp.l && b.next !== 'r') { b.next = 'r'; hit = true; }
+    else if (inp.r && b.next !== 'l') { b.next = 'l'; hit = true; }
+    if (hit) {
+      b.progress++;
+      beep(300 + b.progress * 30, 0.04);
+      if (b.progress >= LEP_PRESSES) {
+        p.hold = { type: 'raw' };
+        p.lock = null; b.user = null; b.progress = 0; b.next = null;
+        float('Ulepiony!', b.st.x, b.st.y - 70, '#9cf07a');
+      }
+    }
+    return;
+  }
+  p.slideCd = Math.max(0, p.slideCd - dt);
+  if (p.slide > 0) {
+    p.slide -= dt;
+    if (p.slide <= 0) p.slideCd = 1.2;
+  } else {
+    p.vx = inp.mx * SPEED; p.vy = inp.my * SPEED;
+    const len = Math.hypot(inp.mx, inp.my);
+    if (len > 0.3) { p.fx = inp.mx / len; p.fy = inp.my / len; }
+  }
+  p.x = clamp(p.x + p.vx * dt, FLOOR.x0 + 26, FLOOR.x1 - 26);
+  p.y = clamp(p.y + p.vy * dt, FLOOR.y0 + 30, FLOOR.y1 - 26);
+
+  if (p.slide <= 0 && p.slideCd <= 0 && Math.hypot(p.vx, p.vy) > 80) {
+    for (const f of S.flour) {
+      if (dist(p, f) < f.r) {
+        p.slide = 0.7; p.vx *= 1.4; p.vy *= 1.4;
+        float('Łiii!', p.x, p.y - 60, '#fff');
+        beep(1000, 0.2, 'sine', 0.05); say('slip', 0.4);
+        break;
+      }
+    }
+  }
+  if (inp.a) doAction(p);
+  if (inp.x) doThrow(p);
+}
+
+function updateShots(dt) {
+  for (let i = S.shots.length - 1; i >= 0; i--) {
+    const s = S.shots[i];
+    s.t += dt;
+    s.x = clamp(s.x + s.vx * dt, FLOOR.x0 + 10, FLOOR.x1 - 10);
+    s.y = clamp(s.y + s.vy * dt, FLOOR.y0 + 10, FLOOR.y1 - 10);
+    let caught = false;
+    if (s.t > 0.08) {
+      for (const p of S.players) {
+        if (p !== s.from && !p.hold && !p.lock && dist(p, s) < 48) {
+          p.hold = s.item; caught = true;
+          float('Złapane!', p.x, p.y - 60, p.color, 22);
+          beep(760, 0.05);
+          break;
+        }
+      }
+    }
+    if (caught) { S.shots.splice(i, 1); continue; }
+    if (s.t >= s.life) { S.shots.splice(i, 1); landShot(s); }
+  }
+}
+
+function updatePot(dt) {
+  const pot = S.pot;
+  for (const it of pot.items) it.t += dt;
+  if (pot.kipi) {
+    pot.kipiT -= dt;
+    if (pot.kipiT <= 0) {
+      pot.kipi = false; pot.nextKipi = rand(24, 38);
+      for (const it of pot.items) it.t = 99;
+      float('Wykipiało!', ST.pot.x, ST.pot.y - 80, '#ff5a4d', 26);
+      say('kipiBad');
+    }
+  } else if (pot.items.length) {
+    pot.nextKipi -= dt;
+    if (pot.nextKipi <= 0) { pot.kipi = true; pot.kipiT = 4.5; say('kipi'); beep(1200, 0.3, 'square', 0.04); }
+  }
+}
+
+function updateCat(dt) {
+  const c = S.cat;
+  const tx = ST.farsz.x + 58, ty = ST.farsz.y + 6;
+  if (c.state === 'away') {
+    c.timer -= dt;
+    if (c.timer <= 0) { c.state = 'coming'; c.x = CAT_DOOR.x; c.y = CAT_DOOR.y; }
+  } else if (c.state === 'coming') {
+    if (moveTowards(c, tx, ty, 125, dt)) { c.state = 'eating'; c.eatT = 2.5; say('cat'); }
+  } else if (c.state === 'eating') {
+    c.eatT -= dt;
+    if (c.eatT <= 0) {
+      c.eatT = 6; S.stats.cat++;
+      penalty(10, null, 'Kot zjadł farsz!', c.x + 20, c.y - 50);
+    }
+  } else if (c.state === 'fleeing') {
+    if (moveTowards(c, CAT_DOOR.x, CAT_DOOR.y, 420, dt)) { c.state = 'away'; c.timer = rand(14, 24); }
+  }
+}
+
+function updateUncle(dt) {
+  const u = S.uncle;
+  if (u.state === 'away') {
+    u.timer -= dt;
+    if (u.timer <= 0 && S.time > 20) { u.state = 'in'; u.stay = 14; u.x = UNCLE_DOOR.x; u.y = UNCLE_DOOR.y; u.wt = 0; say('uncleIn'); }
+  } else if (u.state === 'in') {
+    u.stay -= dt;
+    let target = null, bd = 1e9;
+    for (const p of S.players) {
+      if (p.hold && p.hold.type === 'cooked') {
+        const d = dist(p, u);
+        if (d < bd) { bd = d; target = p; }
+      }
+    }
+    if (target) {
+      moveTowards(u, target.x, target.y, 135, dt);
+      if (dist(u, target) < 46) {
+        target.hold = null; S.stats.uncle++;
+        penalty(10, null, 'Wujek zjadł!', u.x, u.y - 70);
+        say('uncle');
+        u.state = 'leaving';
+      }
+    } else {
+      u.wt -= dt;
+      if (u.wt <= 0) { u.wx = rand(700, 1050); u.wy = rand(230, 520); u.wt = 2.5; }
+      moveTowards(u, u.wx, u.wy, 90, dt);
+    }
+    if (u.stay <= 0 && u.state === 'in') u.state = 'leaving';
+  } else if (u.state === 'leaving') {
+    if (moveTowards(u, UNCLE_DOOR.x, UNCLE_DOOR.y, 160, dt)) { u.state = 'away'; u.timer = rand(28, 42); }
+  }
+}
+
+function updateFlour(dt) {
+  for (let i = S.flour.length - 1; i >= 0; i--) {
+    S.flour[i].ttl -= dt;
+    if (S.flour[i].ttl <= 0) S.flour.splice(i, 1);
+  }
+  S.nextFlour -= dt;
+  if (S.nextFlour <= 0) {
+    S.nextFlour = rand(16, 26);
+    if (S.flour.length < 4) {
+      S.flour.push({ x: rand(250, 1050), y: rand(200, 560), r: 46, ttl: 20 });
+      say('flour', 0.6);
+    }
+  }
+}
+
+function separatePlayers() {
+  const [a, b] = S.players;
+  const d = dist(a, b);
+  if (d >= 50 || d === 0) return;
+  const nx = (b.x - a.x) / d, ny = (b.y - a.y) / d, push = 50 - d;
+  const wa = a.lock ? 0 : b.lock ? 1 : 0.5, wb = b.lock ? 0 : a.lock ? 1 : 0.5;
+  a.x -= nx * push * wa; a.y -= ny * push * wa;
+  b.x += nx * push * wb; b.y += ny * push * wb;
+}
+
+function update(dt) {
+  const inp = [readInput(0), readInput(1)];
+  const anyStart = startRequested || inp.some(i => i.a || i.start);
+  startRequested = false;
+  S.t += dt;
+  S.granny.t -= dt;
+  for (let i = S.floats.length - 1; i >= 0; i--) {
+    const f = S.floats[i];
+    f.t += dt; f.y -= 40 * dt;
+    if (f.t > 1.3) S.floats.splice(i, 1);
+  }
+
+  if (S.phase === 'title') {
+    if (anyStart) { audioInit(); newGame('countdown'); }
+    return;
+  }
+  if (S.phase === 'countdown') {
+    S.countdown -= dt;
+    if (S.countdown <= 0) { S.phase = 'play'; say('start'); beep(880, 0.3); }
+    return;
+  }
+  if (S.phase === 'end') {
+    S.endT += dt;
+    if (S.endT > 2 && anyStart) newGame('countdown');
+    return;
+  }
+
+  // --- rozgrywka
+  S.time -= dt;
+  if (S.time <= 30 && !S.lastWarned) { S.lastWarned = true; say('last'); }
+  S.idleT -= dt;
+  if (S.idleT <= 0) { S.idleT = rand(14, 22); if (S.granny.t <= 0) say('idle'); }
+
+  S.players.forEach((p, i) => updatePlayer(p, inp[i], dt));
+  separatePlayers();
+  updateShots(dt);
+  updatePot(dt);
+  updateCat(dt);
+  updateUncle(dt);
+  updateFlour(dt);
+
+  if (S.time <= 0) {
+    S.time = 0; S.phase = 'end'; S.endT = 0;
+    beep(440, 0.2); setTimeout(() => beep(330, 0.4), 200);
+  }
+}
+
+// ---------------------------------------------------------------- rysowanie
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function txt(s, x, y, size, color, align, outline) {
+  ctx.font = `bold ${size}px "Trebuchet MS", "Segoe UI", system-ui, sans-serif`;
+  ctx.textAlign = align || 'center';
+  ctx.textBaseline = 'middle';
+  if (outline) { ctx.lineWidth = Math.max(3, size / 6); ctx.strokeStyle = outline; ctx.lineJoin = 'round'; ctx.strokeText(s, x, y); }
+  ctx.fillStyle = color || '#fff';
+  ctx.fillText(s, x, y);
+}
+
+function emoji(s, x, y, size) {
+  ctx.font = `${size}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#000';
+  ctx.fillText(s, x, y);
+}
+
+function drawPierog(x, y, r, fill, edge) {
+  ctx.fillStyle = fill; ctx.strokeStyle = edge; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(x, y + r * 0.35, r, Math.PI, 0); ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle = edge;
+  for (let i = 0; i <= 6; i++) {
+    const a = Math.PI + (Math.PI * i) / 6;
+    ctx.beginPath(); ctx.arc(x + Math.cos(a) * r, y + r * 0.35 + Math.sin(a) * r, r * 0.13, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+function drawItem(item, x, y, scale) {
+  const k = scale || 1;
+  if (item.type === 'dough' || item.type === 'filled') {
+    ctx.fillStyle = '#f4e6c3'; ctx.strokeStyle = '#c9b383'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x, y, 15 * k, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    if (item.type === 'filled') {
+      ctx.fillStyle = '#8a5a34';
+      ctx.beginPath(); ctx.arc(x, y, 7 * k, 0, Math.PI * 2); ctx.fill();
+    }
+  } else if (item.type === 'raw') {
+    drawPierog(x, y, 16 * k, '#f6ecd2', '#cdbb90');
+  } else {
+    if (item.q === 'perfect') {
+      ctx.fillStyle = 'rgba(255,213,74,0.35)';
+      ctx.beginPath(); ctx.arc(x, y, 24 * k, 0, Math.PI * 2); ctx.fill();
+    }
+    drawPierog(x, y, 16 * k, item.q === 'perfect' ? '#ffd76a' : '#f0cf8a', '#b98a3c');
+  }
+}
+
+function drawCounter(st, color) {
+  ctx.fillStyle = 'rgba(0,0,0,0.25)'; rr(st.x - 52, st.y - 46, 110, 110, 16); ctx.fill();
+  ctx.fillStyle = color; rr(st.x - 55, st.y - 55, 110, 110, 16); ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 3; ctx.stroke();
+  txt(st.label, st.x, st.y + 72, 16, '#fff', 'center', '#3a2616');
+}
+
+function drawBackground() {
+  ctx.fillStyle = '#5b3a23'; ctx.fillRect(0, 0, W, H);
+  // podłoga w szachownicę
+  const ts = 60;
+  for (let y = FLOOR.y0; y < FLOOR.y1; y += ts) {
+    for (let x = FLOOR.x0; x < FLOOR.x1; x += ts) {
+      const odd = (((x - FLOOR.x0) / ts) + ((y - FLOOR.y0) / ts)) % 2 === 0;
+      ctx.fillStyle = odd ? '#f1e2c4' : '#e3c9a0';
+      ctx.fillRect(x, y, Math.min(ts, FLOOR.x1 - x), Math.min(ts, FLOOR.y1 - y));
+    }
+  }
+  ctx.strokeStyle = '#3a2616'; ctx.lineWidth = 6;
+  ctx.strokeRect(FLOOR.x0, FLOOR.y0, FLOOR.x1 - FLOOR.x0, FLOOR.y1 - FLOOR.y0);
+  // drzwi kota i wujka
+  ctx.fillStyle = '#24170f';
+  rr(CAT_DOOR.x - 34, FLOOR.y0 - 8, 68, 16, 6); ctx.fill();
+  rr(UNCLE_DOOR.x - 44, FLOOR.y1 - 8, 88, 16, 6); ctx.fill();
+}
+
+function drawStations() {
+  const t = S.t;
+  // ciasto
+  drawCounter(ST.dough, '#b98652');
+  ctx.fillStyle = '#f4e6c3'; ctx.strokeStyle = '#c9b383'; ctx.lineWidth = 2;
+  [[-14, 8], [14, 8], [0, -10]].forEach(([dx, dy]) => {
+    ctx.beginPath(); ctx.arc(ST.dough.x + dx, ST.dough.y + dy, 20, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  });
+  // farsz
+  drawCounter(ST.farsz, '#b98652');
+  ctx.fillStyle = '#dfe6ee'; ctx.beginPath(); ctx.arc(ST.farsz.x, ST.farsz.y, 40, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#8fa0b3'; ctx.lineWidth = 3; ctx.stroke();
+  ctx.fillStyle = '#8a5a34'; ctx.beginPath(); ctx.arc(ST.farsz.x, ST.farsz.y, 30, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#a8713f';
+  [[-10, -8], [9, 6], [-4, 12], [12, -12]].forEach(([dx, dy]) => {
+    ctx.beginPath(); ctx.arc(ST.farsz.x + dx, ST.farsz.y + dy, 5, 0, Math.PI * 2); ctx.fill();
+  });
+  // stolnice
+  for (const b of S.boards) {
+    drawCounter(b.st, '#8a633c');
+    ctx.fillStyle = '#e6c58f'; rr(b.st.x - 42, b.st.y - 36, 84, 72, 8); ctx.fill();
+    ctx.strokeStyle = '#b58f55'; ctx.lineWidth = 2; ctx.stroke();
+    if (b.user) {
+      const k = b.progress / LEP_PRESSES;
+      drawItem({ type: k > 0.5 ? 'raw' : 'filled' }, b.st.x, b.st.y, 1.2);
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'; rr(b.st.x - 50, b.st.y - 86, 100, 16, 8); ctx.fill();
+      ctx.fillStyle = '#9cf07a'; rr(b.st.x - 48, b.st.y - 84, Math.max(8, 96 * k), 12, 6); ctx.fill();
+      const lOn = b.next !== 'r', rOn = b.next !== 'l';
+      txt('LB', b.st.x - 30, b.st.y - 108, lOn ? 24 : 18, lOn ? '#ffd54a' : '#9a8f80', 'center', '#3a2616');
+      txt('RB', b.st.x + 30, b.st.y - 108, rOn ? 24 : 18, rOn ? '#ffd54a' : '#9a8f80', 'center', '#3a2616');
+    }
+  }
+  // garnek
+  const pot = S.pot;
+  drawCounter(ST.pot, '#6b7480');
+  const shake = pot.kipi ? Math.sin(t * 60) * 3 : 0;
+  const px = ST.pot.x + shake, py = ST.pot.y;
+  ctx.fillStyle = '#3d444d'; ctx.beginPath(); ctx.arc(px, py, 50, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = pot.kipi ? '#f5f9ff' : '#7fc4e8'; ctx.beginPath(); ctx.arc(px, py, 42, 0, Math.PI * 2); ctx.fill();
+  if (pot.items.length || pot.kipi) {
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    for (let i = 0; i < 5; i++) {
+      const a = t * 2 + i * 1.3, r = 10 + ((t * 20 + i * 9) % 26);
+      ctx.beginPath(); ctx.arc(px + Math.cos(a) * r, py + Math.sin(a) * r, 3, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  const slots = [[-20, -12], [20, -12], [0, 20]];
+  pot.items.forEach((it, i) => {
+    const sx = px + slots[i][0], sy = py + slots[i][1];
+    let col = '#b9c0c8', q = null, type = 'raw';
+    if (it.t > COOK_OVER) { col = '#ff5a4d'; type = 'cooked'; }
+    else if (it.t >= PERFECT_FROM && it.t <= PERFECT_TO) { col = '#ffd54a'; type = 'cooked'; q = 'perfect'; }
+    else if (it.t >= COOK_MIN) { col = '#7be06a'; type = 'cooked'; q = 'ok'; }
+    if (it.t > COOK_OVER) drawPierog(sx, sy, 13, '#9b8f7a', '#6b6050');
+    else drawItem({ type, q }, sx, sy, 0.8);
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.arc(sx, sy, 19, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = col; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.arc(sx, sy, 19, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * clamp(it.t / COOK_OVER, 0, 1)); ctx.stroke();
+  });
+  if (pot.kipi && Math.floor(t * 6) % 2 === 0) txt('KIPI! Wciśnij A!', ST.pot.x, ST.pot.y - 82, 26, '#ff5a4d', 'center', '#fff');
+  // stół
+  drawCounter(ST.plate, '#a8452f');
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(ST.plate.x, ST.plate.y, 42, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#c9d2dc'; ctx.lineWidth = 3; ctx.stroke();
+  const n = Math.min(S.stats.served, 9);
+  for (let i = 0; i < n; i++) {
+    const a = i * 2.4, r = i === 0 ? 0 : 12 + (i % 3) * 7;
+    drawPierog(ST.plate.x + Math.cos(a) * r, ST.plate.y + Math.sin(a) * r - 4, 10, '#f0cf8a', '#b98a3c');
+  }
+  txt('× ' + S.stats.served, ST.plate.x, ST.plate.y - 72, 20, '#fff', 'center', '#3a2616');
+}
+
+function drawActors() {
+  const t = S.t;
+  // mąka
+  for (const f of S.flour) {
+    ctx.globalAlpha = clamp(f.ttl / 2, 0, 1) * 0.85;
+    ctx.fillStyle = '#ffffff';
+    for (let i = 0; i < 6; i++) {
+      const a = i * 1.05;
+      ctx.beginPath(); ctx.arc(f.x + Math.cos(a) * f.r * 0.45, f.y + Math.sin(a) * f.r * 0.4, f.r * 0.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+  // kot
+  const c = S.cat;
+  if (c.state !== 'away') {
+    const bob = c.state === 'eating' ? Math.sin(t * 14) * 3 : 0;
+    ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.beginPath(); ctx.ellipse(c.x, c.y + 22, 22, 7, 0, 0, Math.PI * 2); ctx.fill();
+    emoji('🐈', c.x, c.y + bob, 46);
+    if (c.state === 'eating') txt('mniam mniam', c.x + 6, c.y - 38, 16, '#fff', 'center', '#3a2616');
+  }
+  // wujek
+  const u = S.uncle;
+  if (u.state !== 'away') {
+    ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.beginPath(); ctx.ellipse(u.x, u.y + 30, 30, 9, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#6a8f4e'; ctx.beginPath(); ctx.arc(u.x, u.y, 32, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#3a2616'; ctx.lineWidth = 3; ctx.stroke();
+    emoji('👨', u.x, u.y + 2, 40);
+    txt('wujek Zbyszek', u.x, u.y - 48, 16, '#fff', 'center', '#3a2616');
+  }
+  // gracze
+  for (const p of S.players) {
+    ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.beginPath(); ctx.ellipse(p.x, p.y + 26, 26, 8, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    if (p.slide > 0) ctx.rotate(Math.sin(t * 30) * 0.5);
+    ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(0, 0, 27, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.stroke();
+    emoji(p.face, 0, 2, 34);
+    ctx.restore();
+    // kierunek
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x + p.fx * 36, p.y + p.fy * 36, 5, 0, Math.PI * 2); ctx.fill();
+    txt('P' + (p.i + 1), p.x, p.y + 44, 15, '#fff', 'center', p.color);
+    if (p.hold) drawItem(p.hold, p.x, p.y - 44, 1);
+  }
+  // przedmioty w locie
+  for (const s of S.shots) {
+    const k = Math.sin(Math.PI * clamp(s.t / s.life, 0, 1));
+    ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.beginPath(); ctx.ellipse(s.x, s.y + 12, 14, 5, 0, 0, Math.PI * 2); ctx.fill();
+    drawItem(s.item, s.x, s.y - 30 * k, 1 + 0.5 * k);
+  }
+  // napisy
+  for (const f of S.floats) {
+    ctx.globalAlpha = clamp(1.3 - f.t, 0, 1);
+    txt(f.text, f.x, f.y, f.size, f.color, 'center', '#2a1a10');
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawHud() {
+  ctx.fillStyle = '#3a2616'; ctx.fillRect(0, 0, W, 108);
+  S.players.forEach((p, i) => {
+    const x = i === 0 ? 40 : W - 40, al = i === 0 ? 'left' : 'right';
+    txt(p.face + ' ' + p.name, x, 36, 26, p.color === '#3b82c4' ? '#7fb9ee' : '#f28bb0', al);
+    txt('wkład: ' + p.score, x, 76, 24, '#fff', al);
+  });
+  const sec = Math.ceil(S.time), mm = Math.floor(sec / 60), ss = String(sec % 60).padStart(2, '0');
+  const urgent = S.time <= 30 && S.phase === 'play';
+  txt(`${mm}:${ss}`, W / 2, 34, 44, urgent && Math.floor(S.t * 3) % 2 ? '#ff5a4d' : '#fff');
+  txt('WYNIK: ' + S.score, W / 2 - 90, 82, 28, '#ffd54a');
+  const m = multiplier();
+  txt('COMBO x' + m, W / 2 + 110, 82, m > 1 ? 28 : 22, m > 1 ? '#9cf07a' : '#a89a8a');
+  // babcia
+  ctx.fillStyle = '#3a2616'; ctx.fillRect(0, 636, W, 84);
+  emoji('👵', 60, 678, 54);
+  if (S.granny.t > 0 && S.granny.text) {
+    ctx.fillStyle = '#fff'; rr(110, 650, 760, 56, 18); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(112, 670); ctx.lineTo(92, 678); ctx.lineTo(112, 688); ctx.closePath(); ctx.fill();
+    txt(S.granny.text, 130, 679, 22, '#3a2616', 'left');
+  }
+  txt('A – weź / odłóż / przegoń   X – rzut   LB/RB – lepienie', W - 30, 679, 16, '#c9b89f', 'right');
+}
+
+function overlay(alpha) {
+  ctx.fillStyle = `rgba(30,18,10,${alpha})`; ctx.fillRect(0, 0, W, H);
+}
+
+function drawTitle() {
+  overlay(0.95);
+  emoji('🥟', W / 2 - 330, 92, 70); emoji('🥟', W / 2 + 330, 92, 70);
+  txt('PIEROGI NA CZAS', W / 2, 92, 68, '#ffd54a', 'center', '#3a2616');
+  txt('Wigilia u babci Halinki. Goście za 3 minuty. Ulepcie i podajcie jak najwięcej pierogów!', W / 2, 160, 23, '#fff');
+
+  const steps = [
+    ['1', 'CIASTO', 'weź krążek ciasta (A)'],
+    ['2', 'FARSZ', 'nałóż farsz (A) – pilnuj kota!'],
+    ['3', 'STOLNICA', 'lep: na zmianę LB i RB'],
+    ['4', 'GARNEK', 'wrzuć (A), wyjmij gdy pierścień złoty'],
+    ['5', 'STÓŁ', 'podaj (A): +10, idealny +15'],
+  ];
+  steps.forEach((s, i) => {
+    const y = 214 + i * 40;
+    ctx.fillStyle = '#ffd54a'; ctx.beginPath(); ctx.arc(70, y, 15, 0, Math.PI * 2); ctx.fill();
+    txt(s[0], 70, y + 1, 18, '#3a2616');
+    txt(s[1], 98, y, 21, '#ffd54a', 'left');
+    txt(s[2], 225, y, 20, '#fff', 'left');
+  });
+  const tips = [
+    'X – rzut do partnera (złapie sam). Pieróg na podłodze: −5.',
+    '3 i 6 podań z rzędu bez wpadki = mnożnik x2 i x3.',
+    'Kot w farszu: −10. Przegoń go przyciskiem A.',
+    'Wujek Zbyszek zjada gotowe pierogi z rąk: −10.',
+    'Garnek kipi? Szybko A przy garnku, bo się rozgotują.',
+    'Mąka = poślizg. A obok partnera = podkradasz mu z rąk!',
+  ];
+  tips.forEach((s, i) => txt('• ' + s, 660, 214 + i * 34, 18, '#f1e2c4', 'left'));
+
+  const pads = getPads();
+  [0, 1].forEach(i => {
+    const x = i === 0 ? W / 2 - 300 : W / 2 + 300;
+    const ok = !!pads[i];
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'; rr(x - 250, 440, 500, 120, 16); ctx.fill();
+    txt(PLAYER_STYLE[i].face + ' ' + PLAYER_STYLE[i].name, x, 468, 26, i === 0 ? '#7fb9ee' : '#f28bb0');
+    txt(ok ? '🎮 pad podłączony' : 'pad: brak (naciśnij dowolny przycisk na padzie)', x, 504, 19, ok ? '#9cf07a' : '#c9b89f');
+    txt(i === 0 ? 'klawiatura: WASD, F = A, G = X, Q/E = LB/RB' : 'klawiatura: strzałki, K = A, L = X, I/O = LB/RB', x, 536, 17, '#c9b89f');
+  });
+  if (Math.floor(S.t * 2) % 2 === 0) txt('Naciśnij A na padzie lub ENTER, żeby zacząć', W / 2, 610, 30, '#ffd54a');
+  txt('Dwuklik = pełny ekran', W / 2, 655, 16, '#a89a8a');
+}
+
+function rating(score) {
+  if (score < 60) return ['Głodni pójdą…', '#ff5a4d'];
+  if (score < 160) return ['No, ujdzie w tłoku.', '#f1e2c4'];
+  if (score < 300) return ['Dobre dzieci. Zdolne po babci.', '#9cf07a'];
+  return ['MOJA KREW!', '#ffd54a'];
+}
+
+function drawEnd() {
+  overlay(0.93);
+  const [rt, rc] = rating(S.score);
+  txt('GOŚCIE PRZYSZLI!', W / 2, 90, 60, '#ffd54a', 'center', '#3a2616');
+  txt('Wynik drużyny: ' + S.score, W / 2, 170, 44, '#fff');
+  emoji('👵', W / 2 - 330, 245, 60);
+  txt('„' + rt + '”', W / 2, 245, 40, rc);
+  const st = S.stats;
+  const rows = [
+    ['Podane pierogi', st.served], ['w tym idealne', st.perfect],
+    ['Na podłodze', st.dropped], ['Rozgotowane', st.over],
+    ['Farsz zjedzony przez kota', st.cat], ['Zjedzone przez wujka', st.uncle],
+    ['Podkradzione partnerowi', st.stolen],
+  ];
+  rows.forEach((r, i) => {
+    const y = 310 + i * 32;
+    txt(r[0], W / 2 - 40, y, 22, '#f1e2c4', 'right');
+    txt(String(r[1]), W / 2 + 10, y, 22, '#fff', 'left');
+  });
+  const [a, b] = S.players;
+  let fav;
+  if (a.score === b.score) fav = 'Ulubiony wnuk: remis. Babcia kocha was po równo (podobno).';
+  else {
+    const w = a.score > b.score ? a : b;
+    fav = `🏆 Ulubiony wnuk babci: ${w.name} (${a.score} : ${b.score})`;
+  }
+  txt(fav, W / 2, 570, 30, '#ffd54a');
+  if (S.endT > 2 && Math.floor(S.t * 2) % 2 === 0) txt('A lub ENTER – jeszcze raz', W / 2, 660, 28, '#fff');
+}
+
+function render() {
+  drawBackground();
+  drawStations();
+  drawActors();
+  drawHud();
+  if (S.phase === 'title') drawTitle();
+  else if (S.phase === 'countdown') {
+    overlay(0.45);
+    txt(String(Math.max(1, Math.ceil(S.countdown))), W / 2, H / 2, 200, '#ffd54a', 'center', '#3a2616');
+    txt('Zakasać rękawy!', W / 2, H / 2 + 140, 36, '#fff', 'center', '#3a2616');
+  } else if (S.phase === 'end') drawEnd();
+}
+
+// ---------------------------------------------------------------- pętla
+let last = 0;
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000 || 0);
+  last = now;
+  update(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+
+newGame('title');
+window.__pierogi = { get S() { return S; }, update, render, keys, ST };
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
