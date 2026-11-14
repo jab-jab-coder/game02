@@ -45,7 +45,7 @@ Przedmioty można rzucać do partnera, który złapie je sam, jeśli ma wolne r�
 | Pieróg na podłodze | −5 |
 | Rozgotowany pieróg | −5 |
 | Kot dobrał się do farszu | −10 (co kilka sekund, dopóki go nie przegonisz) |
-| Drugi kot wyłowił pieroga z garnka | −10 (co kilka sekund, dopóki go nie przegonisz) |
+| Kot wyłowił pieroga z garnka | −10 (co kilka sekund, dopóki go nie przegonisz) |
 | Wujek Zbyszek zjadł pieroga z rąk | −10 |
 
 Każda wpadka zeruje combo.
@@ -56,6 +56,7 @@ Wynik jest wspólny i to on decyduje o ocenie babci (od „Głodni pójdą…”
 
 - **Kot Mruczek** wchodzi górnymi drzwiami i idzie do farszu. Przegoń go przyciskiem A.
 - **Kot Filemon** wchodzi tymi samymi drzwiami i idzie do garnka, z którego wyławia pierogi. Przegania się go tak samo.
+- **Trzeci kot** wchodzi tymi samymi drzwiami i chodzi na zmianę: raz do farszu, raz do garnka. Przegania się go tak samo.
 - **Wujek Zbyszek** wchodzi dolnymi drzwiami i goni tego, kto niesie ugotowanego pieroga. Nie da się go przegonić, trzeba go omijać albo przerzucać pierogi nad nim.
 - **Kipiący garnek**: naciśnij A przy garnku w ciągu kilku sekund, inaczej wszystko się rozgotuje.
 - **Mąka na podłodze**: poślizg i chwilowa utrata kontroli. Upuszczone ciasto też zostawia plamę.
