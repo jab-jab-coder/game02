@@ -25,6 +25,8 @@ const SPEED = 290;               // px/s
 const REACH = 85;                // zasięg akcji przy stacji
 const LEP_PRESSES = 12;          // ile naprzemiennych wciśnięć LB/RB
 const POT_SIZE = 3;
+const CHARGE_SWEEP = 0.7;        // sekundy na jedno przejście wskaźnika siły
+const THROW_MIN = 90, THROW_MAX = 700, THROW_SPEED = 600;
 const COOK_MIN = 4, PERFECT_FROM = 5.5, PERFECT_TO = 7.5, COOK_OVER = 10;
 const FLOOR = { x0: 50, y0: 120, x1: 1230, y1: 630 };
 const CAT_DOOR = { x: 640, y: 128 };
@@ -53,6 +55,7 @@ const GRANNY = {
   drop:    ['Na podłogę?! Za moich czasów…', 'Jedzenia się nie rzuca! No, chyba że celnie.', 'Kto to teraz posprząta?'],
   over:    ['Rozgotowany! Klej, nie pieróg!', 'To już zupa, nie pierogi.'],
   cat:     ['Mruczek! Zostaw ten farsz!', 'Kota pilnować, nie gapić się!'],
+  cat2:    ['Filemon! Łapy precz od garnka!', 'Drugi kot przy garnku! Pilnować!'],
   catGone: ['A sio, darmozjadzie!'],
   kipi:    ['KIPI! Garnek kipi!', 'Jezus Maria, kuchenka!'],
   kipiBad: ['No i wykipiało. Wszystko rozgotowane.'],
@@ -136,7 +139,7 @@ function readInput(i) {
   const len = Math.hypot(mx, my);
   if (len > 1) { mx /= len; my /= len; }
   const pr = prevBtn[i];
-  const out = { mx, my, a: a && !pr.a, x: x && !pr.x, l: l && !pr.l, r: r && !pr.r, start: start && !pr.start };
+  const out = { mx, my, a: a && !pr.a, x: x && !pr.x, xHeld: x, l: l && !pr.l, r: r && !pr.r, start: start && !pr.start };
   prevBtn[i] = { a, x, l, r, start };
   return out;
 }
@@ -147,7 +150,7 @@ let S = null;
 function mkPlayer(i) {
   return {
     i, x: i === 0 ? 300 : 680, y: 375, vx: 0, vy: 0, fx: i === 0 ? 1 : -1, fy: 0,
-    hold: null, lock: null, slide: 0, slideCd: 0, score: 0,
+    hold: null, lock: null, slide: 0, slideCd: 0, score: 0, charging: false, chargeT: 0,
     name: PLAYER_STYLE[i].name, color: PLAYER_STYLE[i].color, face: PLAYER_STYLE[i].face,
   };
 }
@@ -156,14 +159,17 @@ function newGame(phase) {
   S = {
     phase: phase || 'title', t: 0, time: ROUND_TIME, countdown: 3, endT: 0,
     score: 0, streak: 0, lastWarned: false, idleT: rand(14, 22),
-    stats: { served: 0, perfect: 0, dropped: 0, over: 0, cat: 0, uncle: 0, stolen: 0 },
+    stats: { served: 0, perfect: 0, dropped: 0, over: 0, cat: 0, potCat: 0, uncle: 0, stolen: 0 },
     players: [mkPlayer(0), mkPlayer(1)],
     boards: [
       { st: ST.board1, user: null, progress: 0, next: null },
       { st: ST.board2, user: null, progress: 0, next: null },
     ],
     pot: { items: [], kipi: false, kipiT: 0, nextKipi: rand(25, 38) },
-    cat: { state: 'away', x: CAT_DOOR.x, y: CAT_DOOR.y, timer: rand(10, 16), eatT: 0 },
+    cats: [
+      { kind: 'farsz', face: '🐈', size: 46, state: 'away', x: CAT_DOOR.x, y: CAT_DOOR.y, timer: rand(10, 16), eatT: 0 },
+      { kind: 'pot', face: '🐱', size: 40, state: 'away', x: CAT_DOOR.x, y: CAT_DOOR.y, timer: rand(24, 34), eatT: 0 },
+    ],
     uncle: { state: 'away', x: UNCLE_DOOR.x, y: UNCLE_DOOR.y, timer: rand(30, 40), stay: 0, wx: 800, wy: 400, wt: 0 },
     flour: [], nextFlour: rand(15, 24),
     shots: [], floats: [],
@@ -225,7 +231,7 @@ function stationAction(p, key) {
   }
   if (key === 'farsz') {
     if (!p.hold || p.hold.type !== 'dough') { if (!p.hold) hint('Najpierw ciasto!'); return !p.hold; }
-    if (S.cat.state === 'eating') { hint('Kot w farszu!'); return true; }
+    if (S.cats[0].state === 'eating') { hint('Kot w farszu!'); return true; }
     p.hold = { type: 'filled' }; beep(380, 0.05); return true;
   }
   if (key === 'board1' || key === 'board2') {
@@ -279,12 +285,13 @@ function stationAction(p, key) {
 
 function doAction(p) {
   if (p.lock) return;
-  const cat = S.cat;
-  if ((cat.state === 'coming' || cat.state === 'eating') && dist(p, cat) < 95) {
-    cat.state = 'fleeing';
-    float('A sio!', cat.x, cat.y - 40, '#fff', 26);
-    beep(900, 0.06); say('catGone', 0.5);
-    return;
+  for (const cat of S.cats) {
+    if ((cat.state === 'coming' || cat.state === 'eating') && dist(p, cat) < 95) {
+      cat.state = 'fleeing';
+      float('A sio!', cat.x, cat.y - 40, '#fff', 26);
+      beep(900, 0.06); say('catGone', 0.5);
+      return;
+    }
   }
   const key = nearestStation(p);
   if (key && stationAction(p, key)) return;
@@ -297,9 +304,17 @@ function doAction(p) {
   }
 }
 
-function doThrow(p) {
+// siła rzutu 0..1: wskaźnik chodzi tam i z powrotem, dopóki trzymasz przycisk
+function throwPower(p) {
+  const m = (p.chargeT / CHARGE_SWEEP) % 2;
+  return m <= 1 ? m : 2 - m;
+}
+function throwDist(power) { return THROW_MIN + (THROW_MAX - THROW_MIN) * power; }
+
+function doThrow(p, power) {
   if (p.lock || !p.hold) return;
-  S.shots.push({ item: p.hold, x: p.x, y: p.y, vx: p.fx * 560, vy: p.fy * 560, t: 0, life: 0.65, from: p });
+  const life = throwDist(power) / THROW_SPEED;
+  S.shots.push({ item: p.hold, x: p.x, y: p.y, vx: p.fx * THROW_SPEED, vy: p.fy * THROW_SPEED, t: 0, life, h: 20 + 45 * power, from: p });
   p.hold = null;
   beep(520, 0.05, 'triangle', 0.06);
 }
@@ -341,6 +356,7 @@ function moveTowards(o, tx, ty, speed, dt) {
 function updatePlayer(p, inp, dt) {
   if (p.lock) {
     const b = p.lock;
+    p.charging = false;
     let hit = false;
     if (inp.l && b.next !== 'r') { b.next = 'r'; hit = true; }
     else if (inp.r && b.next !== 'l') { b.next = 'l'; hit = true; }
@@ -360,7 +376,8 @@ function updatePlayer(p, inp, dt) {
     p.slide -= dt;
     if (p.slide <= 0) p.slideCd = 1.2;
   } else {
-    p.vx = inp.mx * SPEED; p.vy = inp.my * SPEED;
+    const sp = p.charging ? SPEED * 0.55 : SPEED;
+    p.vx = inp.mx * sp; p.vy = inp.my * sp;
     const len = Math.hypot(inp.mx, inp.my);
     if (len > 0.3) { p.fx = inp.mx / len; p.fy = inp.my / len; }
   }
@@ -378,7 +395,15 @@ function updatePlayer(p, inp, dt) {
     }
   }
   if (inp.a) doAction(p);
-  if (inp.x) doThrow(p);
+  // rzut: przytrzymanie ładuje siłę, puszczenie rzuca
+  if (!p.hold || p.lock) p.charging = false;
+  else if (inp.xHeld) {
+    if (!p.charging) { p.charging = true; p.chargeT = 0; }
+    else p.chargeT += dt;
+  } else if (p.charging) {
+    p.charging = false;
+    doThrow(p, throwPower(p));
+  }
 }
 
 function updateShots(dt) {
@@ -420,22 +445,28 @@ function updatePot(dt) {
   }
 }
 
-function updateCat(dt) {
-  const c = S.cat;
-  const tx = ST.farsz.x + 58, ty = ST.farsz.y + 6;
+function updateCat(c, dt) {
+  const atPot = c.kind === 'pot';
+  const tx = atPot ? ST.pot.x - 66 : ST.farsz.x + 58, ty = (atPot ? ST.pot.y : ST.farsz.y) + 6;
   if (c.state === 'away') {
     c.timer -= dt;
     if (c.timer <= 0) { c.state = 'coming'; c.x = CAT_DOOR.x; c.y = CAT_DOOR.y; }
   } else if (c.state === 'coming') {
-    if (moveTowards(c, tx, ty, 125, dt)) { c.state = 'eating'; c.eatT = 2.5; say('cat'); }
+    if (moveTowards(c, tx, ty, 125, dt)) { c.state = 'eating'; c.eatT = 2.5; say(atPot ? 'cat2' : 'cat'); }
   } else if (c.state === 'eating') {
     c.eatT -= dt;
     if (c.eatT <= 0) {
-      c.eatT = 6; S.stats.cat++;
-      penalty(10, null, 'Kot zjadł farsz!', c.x + 20, c.y - 50);
+      c.eatT = 6;
+      if (!atPot) {
+        S.stats.cat++;
+        penalty(10, null, 'Kot zjadł farsz!', c.x + 20, c.y - 50);
+      } else if (S.pot.items.length) {
+        S.pot.items.shift(); S.stats.potCat++;
+        penalty(10, null, 'Kot wyłowił pieroga!', c.x, c.y - 50);
+      }
     }
   } else if (c.state === 'fleeing') {
-    if (moveTowards(c, CAT_DOOR.x, CAT_DOOR.y, 420, dt)) { c.state = 'away'; c.timer = rand(14, 24); }
+    if (moveTowards(c, CAT_DOOR.x, CAT_DOOR.y, 420, dt)) { c.state = 'away'; c.timer = atPot ? rand(18, 28) : rand(14, 24); }
   }
 }
 
@@ -534,7 +565,7 @@ function update(dt) {
   separatePlayers();
   updateShots(dt);
   updatePot(dt);
-  updateCat(dt);
+  S.cats.forEach(c => updateCat(c, dt));
   updateUncle(dt);
   updateFlour(dt);
 
@@ -714,12 +745,12 @@ function drawActors() {
     ctx.globalAlpha = 1;
   }
   // kot
-  const c = S.cat;
-  if (c.state !== 'away') {
+  for (const c of S.cats) {
+    if (c.state === 'away') continue;
     const bob = c.state === 'eating' ? Math.sin(t * 14) * 3 : 0;
     ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.beginPath(); ctx.ellipse(c.x, c.y + 22, 22, 7, 0, 0, Math.PI * 2); ctx.fill();
-    emoji('🐈', c.x, c.y + bob, 46);
-    if (c.state === 'eating') txt('mniam mniam', c.x + 6, c.y - 38, 16, '#fff', 'center', '#3a2616');
+    emoji(c.face, c.x, c.y + bob, c.size);
+    if (c.state === 'eating') txt(c.kind === 'pot' ? 'chlip chlip' : 'mniam mniam', c.x, c.y - 38, 16, '#fff', 'center', '#3a2616');
   }
   // wujek
   const u = S.uncle;
@@ -750,13 +781,33 @@ function drawActors() {
   for (const s of S.shots) {
     const k = Math.sin(Math.PI * clamp(s.t / s.life, 0, 1));
     ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.beginPath(); ctx.ellipse(s.x, s.y + 12, 14, 5, 0, 0, Math.PI * 2); ctx.fill();
-    drawItem(s.item, s.x, s.y - 30 * k, 1 + 0.5 * k);
+    drawItem(s.item, s.x, s.y - s.h * k, 1 + 0.5 * k);
   }
   // napisy
   for (const f of S.floats) {
     ctx.globalAlpha = clamp(1.3 - f.t, 0, 1);
     txt(f.text, f.x, f.y, f.size, f.color, 'center', '#2a1a10');
     ctx.globalAlpha = 1;
+  }
+}
+
+// wskaźnik siły rzutu i miejsce lądowania (rysowane nad HUD-em, żeby nic ich nie zasłaniało)
+function drawCharge() {
+  for (const p of S.players) {
+    if (p.charging && p.hold) {
+      const pw = throwPower(p), d = throwDist(pw);
+      // gdzie spadnie
+      const lx = clamp(p.x + p.fx * d, FLOOR.x0 + 10, FLOOR.x1 - 10), ly = clamp(p.y + p.fy * d, FLOOR.y0 + 10, FLOOR.y1 - 10);
+      ctx.strokeStyle = p.color; ctx.lineWidth = 4; ctx.setLineDash([8, 6]);
+      ctx.beginPath(); ctx.arc(lx, ly, 20, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(lx, ly, 5, 0, Math.PI * 2); ctx.fill();
+      // wskaźnik siły
+      const bx = p.x - 40, by = p.y - 84;
+      ctx.fillStyle = 'rgba(0,0,0,0.6)'; rr(bx - 3, by - 3, 86, 18, 9); ctx.fill();
+      ctx.fillStyle = pw < 0.4 ? '#9cf07a' : pw < 0.75 ? '#ffd54a' : '#ff5a4d';
+      rr(bx, by, Math.max(10, 80 * pw), 12, 6); ctx.fill();
+    }
   }
 }
 
@@ -777,11 +828,11 @@ function drawHud() {
   ctx.fillStyle = '#3a2616'; ctx.fillRect(0, 636, W, 84);
   emoji('👵', 60, 678, 54);
   if (S.granny.t > 0 && S.granny.text) {
-    ctx.fillStyle = '#fff'; rr(110, 650, 760, 56, 18); ctx.fill();
+    ctx.fillStyle = '#fff'; rr(110, 650, 720, 56, 18); ctx.fill();
     ctx.beginPath(); ctx.moveTo(112, 670); ctx.lineTo(92, 678); ctx.lineTo(112, 688); ctx.closePath(); ctx.fill();
     txt(S.granny.text, 130, 679, 22, '#3a2616', 'left');
   }
-  txt('A – weź / odłóż / przegoń   X – rzut   LB/RB – lepienie', W - 30, 679, 16, '#c9b89f', 'right');
+  txt('A – akcja   X (trzymaj i puść) – rzut   LB/RB – lepienie', W - 30, 679, 16, '#c9b89f', 'right');
 }
 
 function overlay(alpha) {
@@ -809,9 +860,9 @@ function drawTitle() {
     txt(s[2], 225, y, 20, '#fff', 'left');
   });
   const tips = [
-    'X – rzut do partnera (złapie sam). Pieróg na podłodze: −5.',
+    'Trzymaj X = siła rzutu, puść = rzut. Pieróg na podłodze: −5.',
     '3 i 6 podań z rzędu bez wpadki = mnożnik x2 i x3.',
-    'Kot w farszu: −10. Przegoń go przyciskiem A.',
+    'Koty: jeden do farszu, drugi do garnka: −10. Przegoń je A.',
     'Wujek Zbyszek zjada gotowe pierogi z rąk: −10.',
     'Garnek kipi? Szybko A przy garnku, bo się rozgotują.',
     'Mąka = poślizg. A obok partnera = podkradasz mu z rąk!',
@@ -849,7 +900,7 @@ function drawEnd() {
   const rows = [
     ['Podane pierogi', st.served], ['w tym idealne', st.perfect],
     ['Na podłodze', st.dropped], ['Rozgotowane', st.over],
-    ['Farsz zjedzony przez kota', st.cat], ['Zjedzone przez wujka', st.uncle],
+    ['Farsz zjedzony przez kota', st.cat], ['Wyłowione z garnka przez kota', st.potCat], ['Zjedzone przez wujka', st.uncle],
     ['Podkradzione partnerowi', st.stolen],
   ];
   rows.forEach((r, i) => {
@@ -873,6 +924,7 @@ function render() {
   drawStations();
   drawActors();
   drawHud();
+  if (S.phase === 'play') drawCharge();
   if (S.phase === 'title') drawTitle();
   else if (S.phase === 'countdown') {
     overlay(0.45);

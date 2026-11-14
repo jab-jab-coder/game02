@@ -18,7 +18,7 @@ Grę można też opublikować przez GitHub Pages (Settings → Pages → gałą�
 |---|---|---|---|
 | Ruch | lewa gałka / krzyżak | W A S D | strzałki |
 | Weź / odłóż / przegoń kota / podkradnij | A | F | K |
-| Rzut | X (lub B) | G | L |
+| Rzut (przytrzymaj, żeby ustawić siłę, puść, żeby rzucić) | X (lub B) | G | L |
 | Lepienie (na zmianę) | LB / RB (lub LT / RT) | Q / E | I / O |
 
 Pierwszy wykryty pad steruje Graczem 1, drugi Graczem 2. Klawiatura działa równolegle, więc można grać też bez padów.
@@ -31,7 +31,7 @@ Pierwszy wykryty pad steruje Graczem 1, drugi Graczem 2. Klawiatura działa rów
 4. **Garnek**: wrzuć pieroga (mieszczą się 3) i wyjmij, gdy pierścień jest zielony, a najlepiej złoty.
 5. **Stół**: podaj.
 
-Przedmioty można rzucać do partnera, który złapie je sam, jeśli ma wolne ręce. Celny rzut surowym pierogiem do garnka też się liczy, a ugotowanym prosto na stół daje premię.
+Przedmioty można rzucać do partnera, który złapie je sam, jeśli ma wolne ręce. Przytrzymanie przycisku rzutu uruchamia wskaźnik siły, który chodzi tam i z powrotem. Im wyższa siła w chwili puszczenia, tym dalej poleci pieróg, a kółko na podłodze pokazuje, gdzie spadnie. W trakcie celowania chodzi się wolniej. Celny rzut surowym pierogiem do garnka też się liczy, a ugotowanym prosto na stół daje premię.
 
 ## Punktacja
 
@@ -45,6 +45,7 @@ Przedmioty można rzucać do partnera, który złapie je sam, jeśli ma wolne r�
 | Pieróg na podłodze | −5 |
 | Rozgotowany pieróg | −5 |
 | Kot dobrał się do farszu | −10 (co kilka sekund, dopóki go nie przegonisz) |
+| Drugi kot wyłowił pieroga z garnka | −10 (co kilka sekund, dopóki go nie przegonisz) |
 | Wujek Zbyszek zjadł pieroga z rąk | −10 |
 
 Każda wpadka zeruje combo.
@@ -54,6 +55,7 @@ Wynik jest wspólny i to on decyduje o ocenie babci (od „Głodni pójdą…”
 ## Przeszkadzajki
 
 - **Kot Mruczek** wchodzi górnymi drzwiami i idzie do farszu. Przegoń go przyciskiem A.
+- **Kot Filemon** wchodzi tymi samymi drzwiami i idzie do garnka, z którego wyławia pierogi. Przegania się go tak samo.
 - **Wujek Zbyszek** wchodzi dolnymi drzwiami i goni tego, kto niesie ugotowanego pieroga. Nie da się go przegonić, trzeba go omijać albo przerzucać pierogi nad nim.
 - **Kipiący garnek**: naciśnij A przy garnku w ciągu kilku sekund, inaczej wszystko się rozgotuje.
 - **Mąka na podłodze**: poślizg i chwilowa utrata kontroli. Upuszczone ciasto też zostawia plamę.
