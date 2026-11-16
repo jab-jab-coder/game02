@@ -1588,12 +1588,7 @@ function drawBackground() {
 
 function drawStations() {
   const t = S.t;
-  // ciasto
-  drawCounter(ST.dough, '#b98652');
-  ctx.fillStyle = '#f4e6c3'; ctx.strokeStyle = '#c9b383'; ctx.lineWidth = 2;
-  [[-14, 8], [14, 8], [0, -10]].forEach(([dx, dy]) => {
-    ctx.beginPath(); ctx.arc(ST.dough.x + dx, ST.dough.y + dy, 20, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  });
+  drawDough();
   drawFarsz();
   for (const b of S.boards) drawBoard(b);
   drawPot();
@@ -1621,6 +1616,69 @@ function drawRack() {
     ctx.globalAlpha = 1;
   }
   txt('SZCZOTKI', RACK.x, y0 + 90, 16, '#fff', 'center', '#3a2616');
+}
+
+// stanowisko z ciastem: rozwałkowany płat z dziurami po wykrojonych krążkach, szklanka do wykrawania i stosik gotowych krążków
+function drawDough() {
+  const x = ST.dough.x, y = ST.dough.y;
+  drawCounter(ST.dough, '#b98652');
+  // mąka rozsypana na blacie
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.beginPath(); ctx.ellipse(x, y + 2, 49, 46, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  [[-46, -40], [44, -44], [-48, 30], [47, 6], [-36, 46], [30, 47], [-50, -8], [10, -49]].forEach(([dx, dy], i) => {
+    ctx.beginPath(); ctx.arc(x + dx, y + dy, 1.6 + (i % 3) * 0.7, 0, Math.PI * 2); ctx.fill();
+  });
+  // płat ciasta o nierównym brzegu
+  const sheet = () => {
+    ctx.beginPath();
+    ctx.moveTo(x - 40, y - 22);
+    ctx.bezierCurveTo(x - 44, y - 44, x - 14, y - 47, x + 4, y - 43);
+    ctx.bezierCurveTo(x + 24, y - 47, x + 46, y - 38, x + 43, y - 14);
+    ctx.bezierCurveTo(x + 47, y + 4, x + 34, y + 12, x + 22, y + 16);
+    ctx.bezierCurveTo(x + 6, y + 26, x - 6, y + 40, x - 26, y + 36);
+    ctx.bezierCurveTo(x - 46, y + 34, x - 46, y + 10, x - 43, y - 4);
+    ctx.bezierCurveTo(x - 45, y - 12, x - 38, y - 16, x - 40, y - 22);
+    ctx.closePath();
+  };
+  ctx.save(); ctx.translate(2, 4); ctx.fillStyle = 'rgba(0,0,0,0.25)'; sheet(); ctx.fill(); ctx.restore();
+  const sg = ctx.createRadialGradient(x - 16, y - 22, 6, x, y - 4, 58);
+  sg.addColorStop(0, '#fffaf0'); sg.addColorStop(0.6, '#f3e6c6'); sg.addColorStop(1, '#e2cd9e');
+  ctx.fillStyle = sg; sheet(); ctx.fill();
+  ctx.strokeStyle = '#c5b185'; ctx.lineWidth = 2; ctx.stroke();
+  // dziury po wykrojonych krążkach: widać blat, górna krawędź rzuca cień
+  [[-22, -20], [-20, 16]].forEach(([dx, dy]) => {
+    ctx.fillStyle = '#a87646'; ctx.beginPath(); ctx.arc(x + dx, y + dy, 13, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#c5b185'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(x + dx, y + dy + 1, 11, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath(); ctx.arc(x + dx + 4, y + dy + 5, 1.6, 0, Math.PI * 2); ctx.fill();
+  });
+  // szklanka wciśnięta w ciasto (widok z góry: szklany rant z odblaskiem)
+  const gx = x + 18, gy = y - 20;
+  ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.beginPath(); ctx.arc(gx + 2, gy + 3, 16, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(190,225,240,0.28)'; ctx.beginPath(); ctx.arc(gx, gy, 15, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#8fb3c6'; ctx.lineWidth = 3.5; ctx.beginPath(); ctx.arc(gx, gy, 15, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = '#eaf6fb'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(gx, gy, 15.5, Math.PI * 1.05, Math.PI * 1.6); ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(gx, gy, 9, Math.PI * 1.1, Math.PI * 1.45); ctx.stroke();
+  ctx.lineCap = 'butt';
+  // stosik wykrojonych krążków: każdy kolejny lekko przesunięty, żeby było widać grubość
+  [[22, 32], [20, 29], [23, 26], [21, 23]].forEach(([dx, dy], i, arr) => {
+    const cx = x + dx, cy = y + dy;
+    if (i === 0) { ctx.fillStyle = 'rgba(0,0,0,0.28)'; ctx.beginPath(); ctx.ellipse(cx + 2, cy + 5, 19, 17, 0, 0, Math.PI * 2); ctx.fill(); }
+    const dg = ctx.createRadialGradient(cx - 6, cy - 6, 2, cx, cy, 18);
+    dg.addColorStop(0, '#fffaf0'); dg.addColorStop(1, i === arr.length - 1 ? '#ecdcb4' : '#dcc898');
+    ctx.fillStyle = dg; ctx.strokeStyle = '#b9a372'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(cx, cy, 17, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  });
+  // odblask i odrobina mąki na wierzchnim krążku
+  ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(x + 21, y + 23, 12, Math.PI * 1.1, Math.PI * 1.5); ctx.stroke();
+  ctx.lineCap = 'butt';
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  [[26, 27], [17, 30], [29, 20]].forEach(([dx, dy]) => { ctx.beginPath(); ctx.arc(x + dx, y + dy, 1.4, 0, Math.PI * 2); ctx.fill(); });
 }
 
 function drawFarsz() {
