@@ -95,10 +95,33 @@ const ST = {
   plate:  { x: 1160, y: 375, label: 'STÓŁ' },
 };
 
+// szczotki oparte o górną ścianę: bierze się je i odkłada przyciskiem A w tej samej strefie
+const TOOLS = {
+  broom: { x: 905, y: 152, name: 'zmiotka' },
+  comb:  { x: 975, y: 152, name: 'szczotka na psa' },
+};
+const RACK = { x: 940, y: 152 };
+const TOOL_REACH = 78;           // z jakiej odległości można wziąć szczotkę
+const RACK_REACH = 105;          // z jakiej odległości można ją odłożyć
+const SWEEP_REACH = 55;          // zmiotka sięga tyle poza brzeg plamy mąki
+
 const PLAYER_STYLE = [
   { name: 'Gracz 1', color: '#3b82c4', face: '👦' },
   { name: 'Gracz 2', color: '#d6457a', face: '👧' },
 ];
+
+// boty do gry w pojedynkę: think = co ile sekund zmienia zdanie, aCd = odstęp między wciśnięciami A,
+// lep = odstęp między wciśnięciami przy lepieniu, speed = jak mocno wychyla gałkę
+const BOTS = {
+  easy: { name: 'Kuzyn Franek', face: '🧒', desc: 'Lepi własne pierogi od ciasta do stołu. Bywa rozkojarzony.',
+    think: [0.35, 0.7], aCd: [0.4, 0.75], lep: [0.2, 0.3], speed: 0.82 },
+  mid: { name: 'Kuzynka Ola', face: '👧', desc: 'Robi wszystko po kolei i pilnuje, żeby nic się nie zmarnowało.',
+    think: [0.1, 0.2], aCd: [0.16, 0.26], lep: [0.11, 0.16], speed: 1 },
+  pot: { name: 'Kuzyn Staś', face: '🧑‍🍳', desc: 'Pilnuje garnka, goni koty i nosi pierogi na stół. Lepisz Ty.',
+    think: [0.1, 0.2], aCd: [0.16, 0.26], lep: [0.13, 0.18], speed: 1 },
+};
+const PARTNERS = ['easy', 'mid', 'pot', 'human'];
+const BOT_DAZE = ['Hmm…', 'Co ja miałem…?', 'O, bombka!', 'Zaraz, zaraz…'];
 
 const GRANNY = {
   title:   ['Goście za 3 minuty, a pierogów ani widu!'],
@@ -122,6 +145,8 @@ const GRANNY = {
   flour:   ['Uwaga, mąka na podłodze!', 'Ślisko jak na lodowisku!'],
   slip:    ['Powoli, bo się zabijesz!'],
   trick:   ['Rzut za trzy! Ale w domu się nie rzuca.'],
+  dogGone: ['No, i przejście wolne.', 'Czesania to Nora nie lubi, oj nie.'],
+  sweep:   ['O, jak czysto! Od razu lepiej.', 'No, wreszcie ktoś sprząta.'],
   idle:    ['Za moich czasów to się lepiło 200 na godzinę.', 'Farszu nie żałować!', 'Ciasto cienko, ale nie za cienko.', 'Kto to widział, tak wolno…'],
   last:    ['Ostatnie 30 sekund! Goście już parkują!'],
 };
@@ -171,7 +196,7 @@ function beep(freq, dur = 0.08, type = 'square', vol = 0.05) {
 
 // ---------------------------------------------------------------- wejście
 const keys = {};
-let startRequested = false;
+let startRequested = false, backRequested = false;
 const KB = [
   { up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD', a: 'KeyF', x: 'KeyG', l: 'KeyQ', r: 'KeyE' },
   { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', a: 'KeyK', x: 'KeyL', l: 'KeyI', r: 'KeyO' },
@@ -183,11 +208,30 @@ window.addEventListener('keydown', e => {
   if (isTyping(e)) return;
   keys[e.code] = true;
   if (e.code === 'Enter') startRequested = true;
+  if (e.code === 'Escape') backRequested = true;
   if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 window.addEventListener('pointerdown', audioInit);
-canvas.addEventListener('dblclick', () => {
+// pozycja kliknięcia w układzie gry (canvas jest skalowany z zachowaniem proporcji)
+function canvasPos(e) {
+  const r = canvas.getBoundingClientRect();
+  const sc = Math.min(r.width / W, r.height / H);
+  return { x: (e.clientX - r.left - (r.width - W * sc) / 2) / sc, y: (e.clientY - r.top - (r.height - H * sc) / 2) / sc };
+}
+const PARTNER_CARD = { x: 650, y: 432, w: 580, h: 116 };
+function partnerCardHit(e) {
+  if (!S || S.phase !== 'title' || net.mode !== 'local') return 0;
+  const c = canvasPos(e), k = PARTNER_CARD;
+  if (c.x < k.x || c.x > k.x + k.w || c.y < k.y || c.y > k.y + k.h) return 0;
+  return c.x < k.x + k.w / 2 ? -1 : 1;
+}
+canvas.addEventListener('click', e => {
+  const dir = partnerCardHit(e);
+  if (dir) stepPartner(dir);
+});
+canvas.addEventListener('dblclick', e => {
+  if (partnerCardHit(e)) return;
   if (document.fullscreenElement) document.exitFullscreen();
   else if (wrap.requestFullscreen) wrap.requestFullscreen().catch(() => {});
 });
@@ -226,10 +270,19 @@ function readDevice(slot, padIdx, kbs) {
 // ---------------------------------------------------------------- stan gry
 let S = null;
 
+// z kim gra Gracz 1 w grze lokalnej: null = wybór automatyczny (dwa pady = człowiek, inaczej bot)
+let partner = null;
+const partnerKind = () => partner || (getPads().length >= 2 ? 'human' : 'mid');
+function stepPartner(dir) {
+  const n = PARTNERS.length;
+  partner = PARTNERS[(PARTNERS.indexOf(partnerKind()) + dir + n) % n];
+  beep(520, 0.04);
+}
+
 function mkPlayer(i) {
   return {
     i, x: i === 0 ? 300 : 680, y: 375, vx: 0, vy: 0, fx: i === 0 ? 1 : -1, fy: 0,
-    hold: null, lock: null, slide: 0, slideCd: 0, score: 0, charging: false, chargeT: 0,
+    hold: null, lock: null, slide: 0, slideCd: 0, score: 0, charging: false, chargeT: 0, sweep: 0,
     name: PLAYER_STYLE[i].name, color: PLAYER_STYLE[i].color, face: PLAYER_STYLE[i].face,
   };
 }
@@ -240,7 +293,10 @@ function mkCat(face, size, targets, timer, gap, dy) {
 }
 
 function newGame(phase) {
+  const kind = net.mode === 'local' ? partnerKind() : 'human';
+  botReset();
   S = {
+    bot: kind === 'human' ? null : kind,
     phase: phase || 'title', t: 0, time: ROUND_TIME, countdown: 3, endT: 0,
     score: 0, streak: 0, lastWarned: false, idleT: rand(14, 22),
     stats: { served: 0, perfect: 0, dropped: 0, over: 0, catPts: 0, potCat: 0, uncle: 0, stolen: 0 },
@@ -257,10 +313,11 @@ function newGame(phase) {
     ],
     uncle: { state: 'away', x: UNCLE_DOOR.x, y: UNCLE_DOOR.y, timer: rand(30, 40), stay: 0, wx: 800, wy: 400, wt: 0 },
     flour: [], nextFlour: rand(15, 24),
-    dog: { state: 'away', x: UNCLE_DOOR.x, y: UNCLE_DOOR.y, a: -Math.PI / 2, spot: -1, timer: 0 },
+    dog: { state: 'away', x: UNCLE_DOOR.x, y: UNCLE_DOOR.y, a: -Math.PI / 2, spot: -1, timer: 0, wait: 0, sayT: 0 },
     shots: [], floats: [],
     granny: { text: pick(GRANNY.title), t: 9999 },
   };
+  if (S.bot) { S.players[1].name = BOTS[S.bot].name; S.players[1].face = BOTS[S.bot].face; }
 }
 
 function say(key, chance = 1) {
@@ -369,6 +426,43 @@ function stationAction(p, key) {
   return false;
 }
 
+const isTool = item => !!(item && TOOLS[item.type]);
+const toolFree = type => !S.players.some(q => q.hold && q.hold.type === type);
+const dogHere = () => S.dog.state === 'walking' || S.dog.state === 'lying';
+
+// A ze szczotką w ręku: odłóż na miejsce, wyczesz psa, zamieć mąkę
+function toolAction(p) {
+  const type = p.hold.type;
+  if (dist(p, RACK) < RACK_REACH) {
+    p.hold = null;
+    float('Odłożone.', TOOLS[type].x, TOOLS[type].y + 60, '#ffe9b0', 20);
+    beep(240, 0.05);
+    return;
+  }
+  // kipiący garnek da się zgasić także ze szczotką w ręku
+  if (S.pot.kipi && nearestStation(p) === 'pot') { stationAction(p, 'pot'); return; }
+  if (type === 'comb') {
+    const d = S.dog;
+    if (dogHere() && dist(p, d) < 100) {
+      d.state = 'shock'; d.wait = 0.9; d.sayT = 2.8;
+      beep(620, 0.08); setTimeout(() => beep(420, 0.14), 90);
+      say('dogGone', 0.6);
+    } else float(dogHere() ? 'Podejdź do Nory!' : 'Nie ma kogo czesać.', p.x, p.y - 62, '#ffe9b0', 20);
+    return;
+  }
+  p.sweep = 0.45;
+  beep(190, 0.07, 'sawtooth', 0.03); setTimeout(() => beep(240, 0.07, 'sawtooth', 0.03), 110);
+  let swept = false;
+  for (let i = S.flour.length - 1; i >= 0; i--) {
+    const f = S.flour[i];
+    if (dist(p, f) < f.r + SWEEP_REACH) {
+      S.flour.splice(i, 1); swept = true;
+      float('Zamiecione!', f.x, f.y - 20, '#9cf07a', 24);
+    }
+  }
+  if (swept) say('sweep', 0.4);
+}
+
 function doAction(p) {
   if (p.lock) return;
   for (const cat of S.cats) {
@@ -379,6 +473,16 @@ function doAction(p) {
       return;
     }
   }
+  if (isTool(p.hold)) { toolAction(p); return; }
+  if (!p.hold) {
+    // wolne ręce przy ścianie ze szczotkami: weź tę, która jest bliżej
+    let best = null, bd = TOOL_REACH;
+    for (const type in TOOLS) {
+      const d = dist(p, TOOLS[type]);
+      if (d < bd && toolFree(type)) { bd = d; best = type; }
+    }
+    if (best) { p.hold = { type: best }; beep(340, 0.05); return; }
+  }
   const key = nearestStation(p);
   if (key && stationAction(p, key)) return;
   const other = S.players[1 - p.i];
@@ -387,7 +491,9 @@ function doAction(p) {
     S.stats.stolen++;
     float('Moje!', p.x, p.y - 60, p.color, 24);
     beep(700, 0.05); say('steal', 0.5);
+    return;
   }
+  if (S.dog.state === 'lying' && dist(p, S.dog) < 90) float('Nora boi się tylko szczotki!', S.dog.x, S.dog.y - 50, '#ffe9b0', 20);
 }
 
 // siła rzutu 0..1: wskaźnik chodzi tam i z powrotem, dopóki trzymasz przycisk
@@ -440,6 +546,7 @@ function moveTowards(o, tx, ty, speed, dt) {
 }
 
 function updatePlayer(p, inp, dt) {
+  p.sweep = Math.max(0, p.sweep - dt);
   if (p.lock) {
     const b = p.lock;
     p.charging = false;
@@ -483,7 +590,11 @@ function updatePlayer(p, inp, dt) {
   if (inp.a) doAction(p);
   // rzut: przytrzymanie ładuje siłę, puszczenie rzuca
   if (!p.hold || p.lock) p.charging = false;
-  else if (inp.xHeld) {
+  else if (isTool(p.hold)) {
+    // szczotek się nie rzuca
+    p.charging = false;
+    if (inp.x) float('Szczotką się nie rzuca!', p.x, p.y - 62, '#ffe9b0', 20);
+  } else if (inp.xHeld) {
     if (!p.charging) { p.charging = true; p.chargeT = 0; }
     else p.chargeT += dt;
   } else if (p.charging) {
@@ -598,10 +709,14 @@ function updateUncle(dt) {
   }
 }
 
-// pies wchodzi na początku rundy, kładzie się w przejściu i co 60–90 s przenosi się w inne
+// pies wchodzi na początku rundy, kładzie się w przejściu i co 60–90 s przenosi się w inne;
+// wyczesany szczotką wychodzi z kuchni i wraca dopiero po chwili
 function updateDog(dt) {
   const d = S.dog;
+  d.sayT = Math.max(0, d.sayT - dt);
   if (d.state === 'away') {
+    d.timer -= dt;
+    if (d.timer > 0) return;
     d.spot = Math.floor(Math.random() * DOG_SPOTS.length);
     d.state = 'walking'; d.x = UNCLE_DOOR.x; d.y = UNCLE_DOOR.y;
     say('dogIn');
@@ -620,6 +735,13 @@ function updateDog(dt) {
       d.spot = next; d.state = 'walking';
       say('dogMove');
     }
+  } else if (d.state === 'shock') {
+    // zobaczyła szczotkę do czesania: chwila grozy, potem ucieczka do drzwi
+    d.wait -= dt;
+    if (d.wait <= 0) d.state = 'leaving';
+  } else if (d.state === 'leaving') {
+    d.a = Math.atan2(UNCLE_DOOR.y - d.y, UNCLE_DOOR.x - d.x);
+    if (moveTowards(d, UNCLE_DOOR.x, UNCLE_DOOR.y, 230, dt)) { d.state = 'away'; d.timer = rand(30, 45); }
   }
 }
 
@@ -722,6 +844,185 @@ function simulate(dt, inp) {
   }
 }
 
+// ---------------------------------------------------------------- bot
+// Bot jest Graczem 2 i gra tak jak człowiek: co klatkę zwraca stan „pada” (ruch, A, LB/RB).
+// Nie zmienia stanu gry bezpośrednio, więc obowiązują go te same reguły co gracza.
+let bot = null;
+function botReset() {
+  bot = { goal: null, think: 0, aCd: 0, lepT: 0, daze: 0, defer: 0, alarmT: 0, alarmLag: rand(0.6, 1.6),
+    mine: 0, takeAt: rand(4.4, 9.2), prevHold: null, prevPot: 0, wander: { x: ST.pot.x + 60, y: ST.pot.y + 110 }, wanderT: 0 };
+}
+const blankInput = () => ({ mx: 0, my: 0, a: false, x: false, xHeld: false, l: false, r: false, start: false });
+const BOT_IDLE = { x: ST.pot.x + 62, y: ST.pot.y + 58 };   // miejsce czekania przy garnku
+const botActiveCats = () => S.cats.filter(c => c.state === 'coming' || c.state === 'eating');
+
+// cel bota: dokąd iść (tgt), jak blisko podejść (stop), z jakiej odległości wciskać A (reach) i czy już wciskać (act)
+function botGoal(p) {
+  const b = bot, kind = S.bot, pot = S.pot, mate = S.players[0], u = S.uncle;
+  const h = p.hold ? p.hold.type : null, first = pot.items[0];
+  const goSt = (key, act = true) => ({ key, tgt: ST[key], stop: 62, reach: 74, act });
+  const goCat = c => ({ key: 'cat', tgt: c, stop: 66, reach: 88, act: true });
+  const stay = (key, tgt) => ({ key, tgt, stop: 10, reach: 0, act: false });
+  const cats = botActiveCats();
+  const farszCat = S.cats.find(c => c.target === 'farsz' && c.state === 'eating');
+  const freeBoard = () => {
+    const free = S.boards.filter(bd => !bd.user).sort((a, c) => dist(p, a.st) - dist(p, c.st))[0];
+    return free ? goSt(free === S.boards[0] ? 'board1' : 'board2') : stay('idle', BOT_IDLE);
+  };
+
+  // --- Franek: robi swoje pierogi po kolei, alarmy zauważa z opóźnieniem
+  if (kind === 'easy') {
+    const noticed = b.alarmT > b.alarmLag;
+    if (pot.kipi && noticed) return goSt('pot');
+    const eating = cats.filter(c => c.state === 'eating' && dist(p, c) < 600).sort((a, c) => dist(p, a) - dist(p, c))[0];
+    if (eating && noticed) return goCat(eating);
+    if (h === 'cooked') return goSt('plate');
+    if (h === 'raw') return pot.items.length < POT_SIZE ? goSt('pot') : stay('wander', b.wander);
+    if (h === 'filled') return freeBoard();
+    if (h === 'dough') return farszCat ? goCat(farszCat) : goSt('farsz');
+    if (b.mine > 0 && first) return first.t >= b.takeAt ? goSt('pot') : stay('wander', b.wander);
+    return goSt('dough');
+  }
+
+  // --- Ola i Staś
+  const mateFree = !mate.lock;
+  if (pot.kipi) {
+    const mateOn = kind === 'mid' && mateFree && dist(mate, ST.pot) < 120 && dist(mate, ST.pot) < dist(p, ST.pot) && pot.kipiT > 2.5;
+    if (!mateOn) return goSt('pot');
+  }
+  // kot: najpierw ten, który już je; odpuszczamy na chwilę, gdy partner jest wyraźnie bliżej
+  let cat = null, best = 1e9;
+  for (const c of cats) {
+    const mateOn = mateFree && dist(mate, c) < 300 && dist(mate, c) + 60 < dist(p, c);
+    if (mateOn && (c.state === 'coming' || b.defer < 1.5)) continue;
+    const score = dist(p, c) - (c.state === 'eating' ? 200 : 0);
+    if (score < best) { best = score; cat = c; }
+  }
+  if (cat && dist(p, cat) < 260) return goCat(cat);
+  if (h === 'cooked') return goSt('plate');
+  // boty nie używają szczotek; gdyby jakąś podkradły, odnoszą ją pod ścianę
+  if (isTool(p.hold)) return { key: 'rack', tgt: RACK, stop: 70, reach: 95, act: true };
+
+  if (!h && first) {
+    const eta = dist(p, ST.pot) / SPEED;
+    const mateOn = kind === 'mid' && mateFree && !mate.hold && dist(mate, ST.pot) < 110 && dist(mate, ST.pot) < dist(p, ST.pot) && first.t < 8.5;
+    if (!mateOn && first.t + eta >= PERFECT_FROM + 0.05) {
+      // wujek tuż obok: poczekaj z wyjmowaniem, chyba że zaraz się rozgotuje
+      const uncleClose = u.state === 'in' && dist(p, u) < 90 && first.t < 9;
+      return goSt('pot', first.t >= PERFECT_FROM + 0.05 && !uncleClose);
+    }
+  }
+  if (cat) {
+    const trip = 2 * dist(p, cat) / SPEED + 0.6;
+    if (h || !first || first.t + trip < COOK_OVER - 0.5) return goCat(cat);
+  }
+
+  if (h === 'raw') return pot.items.length < POT_SIZE ? goSt('pot') : stay('idle', BOT_IDLE);
+  if (h === 'filled') return freeBoard();
+  if (h === 'dough') return farszCat ? goCat(farszCat) : goSt('farsz');
+
+  // wolne ręce: łap to, co rzuca partner (chyba że leci prosto do garnka albo na stół)
+  for (const s of S.shots) {
+    if (s.from === p) continue;
+    const left = s.life - s.t;
+    const land = { x: clamp(s.x + s.vx * left, FLOOR.x0 + 10, FLOOR.x1 - 10), y: clamp(s.y + s.vy * left, FLOOR.y0 + 10, FLOOR.y1 - 10) };
+    if (s.item.type === 'raw' && dist(land, ST.pot) < 90 && pot.items.length < POT_SIZE) continue;
+    if (s.item.type === 'cooked' && dist(land, ST.plate) < 95) continue;
+    if (dist(p, land) / SPEED < left + 0.3) return { key: 'catch', tgt: land, stop: 6, reach: 0, act: false };
+  }
+
+  if (kind === 'pot') return stay('idle', BOT_IDLE);
+  // Ola: nowy pieróg tylko wtedy, gdy zdąży wrócić, zanim ten w garnku przestanie być idealny
+  if (first) {
+    const trip = (dist(p, ST.dough) + dist(ST.dough, ST.farsz) + dist(ST.farsz, ST.board2) + dist(ST.board2, ST.pot)) / SPEED + 2.6;
+    const mateTends = mateFree && !mate.hold && dist(mate, ST.pot) < 200;
+    if (!mateTends && (pot.items.length >= POT_SIZE || first.t + trip > PERFECT_TO)) return stay('idle', BOT_IDLE);
+  }
+  return goSt('dough');
+}
+
+function botInput(dt) {
+  const out = blankInput();
+  if (S.phase !== 'play' || !S.bot) return out;
+  const p = S.players[1], b = bot, kind = S.bot, cfg = BOTS[kind], pot = S.pot;
+  const h = p.hold ? p.hold.type : null;
+
+  // co się zmieniło od poprzedniej klatki
+  if (b.prevHold === 'raw' && !h && pot.items.length > b.prevPot) { b.mine++; b.takeAt = rand(4.4, 9.2); }
+  if (!b.prevHold && h === 'cooked') b.mine = Math.max(0, b.mine - 1);
+  if (!pot.items.length) b.mine = 0;
+  b.prevHold = h; b.prevPot = pot.items.length;
+  const eating = S.cats.some(c => c.state === 'eating');
+  b.defer = eating ? b.defer + dt : 0;
+  if (pot.kipi || eating) b.alarmT += dt;
+  else if (b.alarmT > 0) { b.alarmT = 0; b.alarmLag = rand(0.6, 1.6); }
+  b.wanderT -= dt;
+  if (b.wanderT <= 0) {
+    b.wanderT = rand(1.5, 3);
+    b.wander = { x: clamp(ST.pot.x + rand(-150, 150), FLOOR.x0 + 40, FLOOR.x1 - 40), y: clamp(ST.pot.y + rand(70, 170), FLOOR.y0 + 40, FLOOR.y1 - 40) };
+  }
+
+  if (p.lock) {
+    b.goal = null;
+    b.lepT -= dt;
+    if (b.lepT <= 0) { out[p.lock.next || 'l'] = true; b.lepT = rand(cfg.lep[0], cfg.lep[1]); }
+    return out;
+  }
+  b.aCd -= dt; b.think -= dt;
+  if (b.daze > 0) { b.daze -= dt; return out; }
+  if (p.slide > 0) return out;
+  if (!b.goal || b.think <= 0) { b.goal = botGoal(p); b.think = rand(cfg.think[0], cfg.think[1]); }
+  const g = b.goal, t = g.tgt, d = dist(p, t);
+
+  if (d > g.stop) {
+    let dx = (t.x - p.x) / d, dy = (t.y - p.y) / d;
+    {
+      // omijanie bokiem: leżącego psa omija każdy bot (inaczej by na nim utknął),
+      // mąkę i wujka (gdy niesie ugotowanego pieroga) tylko Ola i Staś
+      const obs = [];
+      if (S.dog.state === 'lying') obs.push({ x: S.dog.x, y: S.dog.y, r: 100, hard: true });
+      if (kind !== 'easy') {
+        for (const f of S.flour) obs.push({ x: f.x, y: f.y, r: f.r + 60, hard: false });
+        if (h === 'cooked' && S.uncle.state === 'in') obs.push({ x: S.uncle.x, y: S.uncle.y, r: 170, hard: true });
+      }
+      const fx = dx, fy = dy;
+      for (const o of obs) {
+        const od = dist(p, o);
+        if (od >= o.r || od === 0) continue;
+        if (!o.hard && dist(t, o) < o.r) continue;           // cel leży w mące, trudno
+        const ax = (p.x - o.x) / od, ay = (p.y - o.y) / od;
+        if (!o.hard && ax * fx + ay * fy > 0.2) continue;     // już się oddalamy
+        if (o.hard && ax * fx + ay * fy > 0.5) continue;      // przeszkoda została z tyłu
+        const w = (o.r - od) / o.r * 2 + 0.6;
+        let side = fx * ay - fy * ax >= 0 ? 1 : -1;
+        // jeśli z tej strony przeszkody jest ściana, obejdź z drugiej
+        const wx = o.x - fy * side * o.r, wy = o.y + fx * side * o.r;
+        if (wx < FLOOR.x0 + 40 || wx > FLOOR.x1 - 40 || wy < FLOOR.y0 + 40 || wy > FLOOR.y1 - 40) side = -side;
+        dx += ax * w * 0.7 - fy * side * w;
+        dy += ay * w * 0.7 + fx * side * w;
+      }
+      const len = Math.hypot(dx, dy) || 1;
+      dx /= len; dy /= len;
+    }
+    out.mx = dx * cfg.speed; out.my = dy * cfg.speed;
+  }
+
+  if (g.act && d < g.reach && b.aCd <= 0) {
+    // tuż przed wciśnięciem sprawdź, czy plan jest nadal aktualny
+    const f = botGoal(p);
+    if (f.key === g.key && f.tgt === g.tgt && f.act) {
+      out.a = true;
+      b.aCd = rand(cfg.aCd[0], cfg.aCd[1]);
+      b.think = rand(0.05, 0.12);
+      if (kind === 'easy' && Math.random() < 0.22) {
+        b.daze = rand(0.6, 1.4);
+        float(pick(BOT_DAZE), p.x, p.y - 62, '#f28bb0', 20);
+      }
+    } else b.goal = f;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- sieć: migawki stanu
 const r1 = v => Math.round(v * 10) / 10, r2 = v => Math.round(v * 100) / 100;
 
@@ -732,13 +1033,13 @@ function snapshot() {
     players: S.players.map(p => ({
       x: r1(p.x), y: r1(p.y), fx: r2(p.fx), fy: r2(p.fy), hold: p.hold,
       lock: p.lock ? S.boards.indexOf(p.lock) : -1, slide: r2(Math.max(0, p.slide)),
-      charging: p.charging, chargeT: r2(p.chargeT), score: p.score,
+      charging: p.charging, chargeT: r2(p.chargeT), score: p.score, sweep: r2(p.sweep),
     })),
     boards: S.boards.map(b => ({ user: b.user ? b.user.i : -1, progress: b.progress, next: b.next })),
     pot: { items: S.pot.items.map(it => r2(it.t)), kipi: S.pot.kipi },
     cats: S.cats.map(c => ({ state: c.state, target: c.target, x: r1(c.x), y: r1(c.y) })),
     uncle: { state: S.uncle.state, x: r1(S.uncle.x), y: r1(S.uncle.y) },
-    dog: { state: S.dog.state, x: r1(S.dog.x), y: r1(S.dog.y), a: r2(S.dog.a) },
+    dog: { state: S.dog.state, x: r1(S.dog.x), y: r1(S.dog.y), a: r2(S.dog.a), sayT: r2(S.dog.sayT) },
     flour: S.flour.map(f => ({ x: r1(f.x), y: r1(f.y), r: f.r, ttl: r2(f.ttl) })),
     shots: S.shots.map(s => ({ item: s.item, x: r1(s.x), y: r1(s.y), vx: r1(s.vx), vy: r1(s.vy), t: r2(s.t), life: r2(s.life), h: r1(s.h) })),
     floats: S.floats.map(f => ({ text: f.text, x: r1(f.x), y: r1(f.y), color: f.color, size: f.size, t: r2(f.t) })),
@@ -759,7 +1060,7 @@ function applySnapshot(d) {
     const p = S.players[i];
     setTarget(p, q.x, q.y, false);
     p.fx = q.fx; p.fy = q.fy; p.hold = q.hold; p.lock = q.lock >= 0 ? S.boards[q.lock] : null;
-    p.slide = q.slide; p.charging = q.charging; p.chargeT = q.chargeT; p.score = q.score;
+    p.slide = q.slide; p.charging = q.charging; p.chargeT = q.chargeT; p.score = q.score; p.sweep = q.sweep || 0;
   });
   d.boards.forEach((q, i) => {
     const b = S.boards[i];
@@ -773,7 +1074,7 @@ function applySnapshot(d) {
   });
   setTarget(S.uncle, d.uncle.x, d.uncle.y, S.uncle.state === 'away');
   S.uncle.state = d.uncle.state;
-  if (d.dog) { setTarget(S.dog, d.dog.x, d.dog.y, S.dog.state === 'away'); S.dog.state = d.dog.state; S.dog.a = d.dog.a; }
+  if (d.dog) { setTarget(S.dog, d.dog.x, d.dog.y, S.dog.state === 'away'); S.dog.state = d.dog.state; S.dog.a = d.dog.a; S.dog.sayT = d.dog.sayT || 0; }
   S.flour = d.flour; S.shots = d.shots; S.floats = d.floats; S.granny = d.granny;
 }
 
@@ -959,8 +1260,8 @@ async function joinRoom(code) {
   code = normCode(code);
   if (!code) { net.status = 'Wpisz kod pokoju.'; uiSync(); return; }
   netReset();
-  if (S.phase !== 'title') newGame('title');
   net.mode = 'guest'; net.code = code; net.status = 'Łączę z pokojem…';
+  newGame('title');
   uiSync();
   try { await loadPeerLib(); } catch (e) { leaveOnline('Nie udało się wczytać biblioteki sieciowej (peerjs.min.js).'); return; }
   if (net.mode !== 'guest' || net.code !== code) return;
@@ -1057,7 +1358,19 @@ function guestFrame(dt) {
   for (const f of S.floats) { f.t += dt; f.y -= 40 * dt; }
 }
 
+// ekran tytułowy w grze lokalnej: lewo/prawo na dowolnym padzie lub klawiaturze zmienia partnera
+const navPrev = [0, 0];
+function titleNav(inp) {
+  inp.forEach((d, i) => {
+    const s = d.mx > 0.5 ? 1 : d.mx < -0.5 ? -1 : 0;
+    if (s && s !== navPrev[i]) stepPartner(s);
+    navPrev[i] = s;
+  });
+}
+
 function update(dt) {
+  const back = backRequested;
+  backRequested = false;
   if (net.mode === 'guest') { guestFrame(dt); return; }
   if (net.mode === 'host') {
     if (net.connected && Date.now() - net.lastRecv > DROP_MS) {
@@ -1069,7 +1382,13 @@ function update(dt) {
     hostSend();
     return;
   }
-  simulate(dt, [readDevice(0, 0, [KB[0]]), readDevice(1, 1, [KB[1]])]);
+  // z botem Gracz 1 ma oba układy klawiszy; na ekranie tytułowym czytamy oba urządzenia osobno
+  const solo = S.bot && S.phase !== 'title';
+  const inp = solo ? [readDevice(0, 0, KB), botInput(dt)] : [readDevice(0, 0, [KB[0]]), readDevice(1, 1, [KB[1]])];
+  if (S.phase === 'title') titleNav(inp);
+  // po rundzie: X lub ESC wraca do wyboru partnera
+  if (S.phase === 'end' && S.endT > 1 && (back || inp.some(i => i.x))) { startRequested = false; newGame('title'); return; }
+  simulate(dt, inp);
 }
 
 // ---------------------------------------------------------------- lobby (HTML)
@@ -1170,8 +1489,42 @@ function drawSparkle(x, y, r) {
   ctx.fill();
 }
 
+// zmiotka na kiju albo szczotka do czesania psa; (x, y) to środek, rot = pochylenie
+function drawTool(type, x, y, k, rot) {
+  ctx.save();
+  ctx.translate(x, y); ctx.rotate(rot || 0);
+  ctx.lineCap = 'round';
+  if (type === 'broom') {
+    ctx.strokeStyle = '#6d4420'; ctx.lineWidth = 6 * k;
+    ctx.beginPath(); ctx.moveTo(0, -30 * k); ctx.lineTo(0, 10 * k); ctx.stroke();
+    ctx.strokeStyle = '#b98652'; ctx.lineWidth = 3.5 * k;
+    ctx.beginPath(); ctx.moveTo(0, -30 * k); ctx.lineTo(0, 10 * k); ctx.stroke();
+    ctx.fillStyle = '#c0392b'; ctx.strokeStyle = '#7d2118'; ctx.lineWidth = 1.5;
+    rr(-14 * k, 8 * k, 28 * k, 8 * k, 3 * k); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = '#e2b84a'; ctx.lineWidth = 2.2 * k;
+    for (let i = -5; i <= 5; i++) {
+      ctx.beginPath(); ctx.moveTo(i * 2.4 * k, 16 * k); ctx.lineTo(i * 3 * k, 29 * k); ctx.stroke();
+    }
+  } else {
+    // rączka
+    ctx.fillStyle = '#2f8f9d'; ctx.strokeStyle = '#1c5a64'; ctx.lineWidth = 1.5;
+    rr(-5 * k, -2 * k, 10 * k, 28 * k, 5 * k); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#1c5a64'; ctx.beginPath(); ctx.arc(0, 20 * k, 2 * k, 0, Math.PI * 2); ctx.fill();
+    // szeroka głowica z metalowymi ząbkami
+    ctx.strokeStyle = '#cfd6dd'; ctx.lineWidth = 1.6 * k;
+    for (let i = -6; i <= 6; i++) {
+      ctx.beginPath(); ctx.moveTo(i * 2.3 * k, -13 * k); ctx.lineTo(i * 2.3 * k, -19 * k); ctx.stroke();
+    }
+    ctx.fillStyle = '#3a4a55'; ctx.strokeStyle = '#1f2a31'; ctx.lineWidth = 1.5;
+    rr(-17 * k, -14 * k, 34 * k, 13 * k, 4 * k); ctx.fill(); ctx.stroke();
+  }
+  ctx.lineCap = 'butt';
+  ctx.restore();
+}
+
 function drawItem(item, x, y, scale) {
   const k = scale || 1;
+  if (TOOLS[item.type]) { drawTool(item.type, x, y + 4, 0.95 * k, 0.3); return; }
   if (item.type === 'dough' || item.type === 'filled') {
     // krążek ciasta
     ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.beginPath(); ctx.ellipse(x + 1, y + 3 * k, 16 * k, 14 * k, 0, 0, Math.PI * 2); ctx.fill();
@@ -1245,6 +1598,29 @@ function drawStations() {
   for (const b of S.boards) drawBoard(b);
   drawPot();
   drawTable();
+  drawRack();
+}
+
+// strefa szczotek pod górną ścianą: puste miejsce pokazuje zarys, żeby było widać, gdzie odłożyć
+function drawRack() {
+  const x0 = RACK.x - 78, y0 = FLOOR.y0 + 3;
+  ctx.fillStyle = 'rgba(90,58,35,0.22)'; rr(x0, y0, 156, 74, 10); ctx.fill();
+  ctx.strokeStyle = '#8a5a2b'; ctx.lineWidth = 2; ctx.setLineDash([7, 5]);
+  rr(x0, y0, 156, 74, 10); ctx.stroke();
+  ctx.setLineDash([]);
+  for (const type in TOOLS) {
+    const tl = TOOLS[type], free = toolFree(type);
+    // haczyk na ścianie
+    ctx.fillStyle = '#3a2616'; ctx.beginPath(); ctx.arc(tl.x + 8, y0 + 4, 4, 0, Math.PI * 2); ctx.fill();
+    if (free) {
+      ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.beginPath(); ctx.ellipse(tl.x - 6, tl.y + 36, 18, 5, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = free ? 1 : 0.2;
+    if (type === 'broom') drawTool(type, tl.x, tl.y + 6, 1.05, 0.22);
+    else drawTool(type, tl.x, tl.y + 12, 1.15, 0.18);
+    ctx.globalAlpha = 1;
+  }
+  txt('SZCZOTKI', RACK.x, y0 + 90, 16, '#fff', 'center', '#3a2616');
 }
 
 function drawFarsz() {
@@ -1579,6 +1955,8 @@ function drawActors() {
     emoji('👨', u.x, u.y + 2, 40);
     txt('wujek Zbyszek', u.x, u.y - 48, 16, '#fff', 'center', '#3a2616');
   }
+  // pies
+  const dg = S.dog;
   // gracze
   for (const p of S.players) {
     ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.beginPath(); ctx.ellipse(p.x, p.y + 26, 26, 8, 0, 0, Math.PI * 2); ctx.fill();
@@ -1593,7 +1971,23 @@ function drawActors() {
     ctx.fillStyle = p.color;
     ctx.beginPath(); ctx.arc(p.x + p.fx * 36, p.y + p.fy * 36, 5, 0, Math.PI * 2); ctx.fill();
     txt('P' + (p.i + 1), p.x, p.y + 44, 15, '#fff', 'center', p.color);
-    if (p.hold) drawItem(p.hold, p.x, p.y - 44, 1);
+    if (p.hold && p.hold.type === 'broom' && p.sweep > 0) {
+      // zamiatanie: zmiotka chodzi po podłodze przed graczem, lecą kłębki kurzu
+      const sw = Math.sin((0.45 - p.sweep) / 0.45 * Math.PI * 3), bx = p.x + p.fx * 40 - p.fy * sw * 24, by = p.y + p.fy * 40 + p.fx * sw * 24 + 4;
+      drawTool('broom', bx, by, 1.05, sw * 0.6);
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      [[-16, 30, 5], [14, 34, 4], [0, 40, 6]].forEach(([dx, dy, r]) => {
+        ctx.beginPath(); ctx.arc(bx + dx + sw * 8, by + dy - (0.45 - p.sweep) * 30, r, 0, Math.PI * 2); ctx.fill();
+      });
+    } else if (p.hold) drawItem(p.hold, p.x, p.y - 44, 1);
+  }
+  // dymek psa (zostaje chwilę przy drzwiach, żeby dało się go przeczytać)
+  if (dg.sayT > 0) {
+    const s = 'O nie, czesania to ja nie zniosę!';
+    const bx = clamp(dg.x, 220, W - 220), by = dg.y - 74;
+    ctx.fillStyle = '#fff'; rr(bx - 190, by - 22, 380, 44, 16); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(dg.x - 10, by + 20); ctx.lineTo(dg.x, by + 36); ctx.lineTo(dg.x + 10, by + 20); ctx.closePath(); ctx.fill();
+    txt(s, bx, by + 1, 21, '#3a2616');
   }
   // przedmioty w locie
   for (const s of S.shots) {
@@ -1633,8 +2027,8 @@ function drawHud() {
   ctx.fillStyle = '#3a2616'; ctx.fillRect(0, 0, W, 108);
   S.players.forEach((p, i) => {
     const x = i === 0 ? 40 : W - 40, al = i === 0 ? 'left' : 'right';
-    const me = (net.mode === 'host' && i === 0) || (net.mode === 'guest' && i === 1);
-    txt(p.face + ' ' + p.name + (me ? ' (Ty)' : ''), x, 36, 26, p.color === '#3b82c4' ? '#7fb9ee' : '#f28bb0', al);
+    const me = (net.mode === 'host' && i === 0) || (net.mode === 'guest' && i === 1) || (S.bot && i === 0);
+    txt(p.face + ' ' + p.name + (me ? ' (Ty)' : S.bot ? ' (bot)' : ''), x, 36, 26, p.color === '#3b82c4' ? '#7fb9ee' : '#f28bb0', al);
     txt('wkład: ' + p.score, x, 76, 24, '#fff', al);
   });
   const sec = Math.ceil(S.time), mm = Math.floor(sec / 60), ss = String(sec % 60).padStart(2, '0');
@@ -1692,17 +2086,22 @@ function drawTitle() {
     'Garnek kipi? Szybko A przy garnku, bo się rozgotują.',
     'Mąka = poślizg. A obok partnera = podkradasz mu z rąk!',
     'Suczka Nora śpi w przejściu. Nie przejdziesz, trzeba ją obejść.',
+    'Szczotki pod ścianą (A): zmiotka sprząta mąkę, druga płoszy Norę.',
   ];
-  tips.forEach((s, i) => txt('• ' + s, 660, 214 + i * 34, 18, '#f1e2c4', 'left'));
+  tips.forEach((s, i) => txt('• ' + s, 660, 208 + i * 28, 18, '#f1e2c4', 'left'));
 
   const pads = getPads();
-  const padLine = ok => ok ? '🎮 pad podłączony' : 'pad: brak (naciśnij dowolny przycisk na padzie)';
+  const kind = net.mode === 'local' ? partnerKind() : 'human';
+  const padLine =ok => ok ? '🎮 pad podłączony' : 'pad: brak (naciśnij dowolny przycisk na padzie)';
   const kbBoth = 'klawiatura: WASD lub strzałki, F/K = A, G/L = X, Q/E lub I/O = LB/RB';
   [0, 1].forEach(i => {
     const x = i === 0 ? W / 2 - 300 : W / 2 + 300;
     let name = PLAYER_STYLE[i].face + ' ' + PLAYER_STYLE[i].name, l1, l1ok, l2;
     const me = (net.mode === 'host' && i === 0) || (net.mode === 'guest' && i === 1);
-    if (net.mode === 'local') {
+    if (net.mode === 'local' && kind !== 'human') {
+      if (i === 0) { name += ' (Ty)'; l1ok = !!pads[0]; l1 = padLine(l1ok); l2 = kbBoth; }
+      else { name = BOTS[kind].face + ' ' + BOTS[kind].name + ' (bot)'; l1ok = true; l1 = BOTS[kind].desc; }
+    } else if (net.mode === 'local') {
       l1ok = !!pads[i]; l1 = padLine(l1ok);
       l2 = i === 0 ? 'klawiatura: WASD, F = A, G = X, Q/E = LB/RB' : 'klawiatura: strzałki, K = A, L = X, I/O = LB/RB';
     } else if (me) {
@@ -1714,10 +2113,18 @@ function drawTitle() {
     }
     ctx.fillStyle = 'rgba(255,255,255,0.08)'; rr(x - 290, 432, 580, 116, 16); ctx.fill();
     txt(name, x, 460, 26, i === 0 ? '#7fb9ee' : '#f28bb0');
-    txt(l1, x, 494, 19, l1ok ? '#9cf07a' : '#c9b89f');
-    txt(l2, x, 525, 16, '#c9b89f');
+    txt(l1, x, i === 1 && net.mode === 'local' ? 491 : 494, l1.length > 55 ? 17 : 19, l1ok ? '#9cf07a' : '#c9b89f');
+    if (net.mode === 'local' && i === 1) {
+      // wybór partnera: strzałki po bokach, kropki pokazują pozycję na liście
+      txt('◀', x - 262, 460, 28, '#ffd54a'); txt('▶', x + 262, 460, 28, '#ffd54a');
+      txt(kind === 'human' ? l2 : 'zmiana: lewo/prawo na padzie lub klawiaturze albo kliknięcie', x, 519, 15, '#c9b89f');
+      PARTNERS.forEach((k, n) => {
+        ctx.fillStyle = k === kind ? '#ffd54a' : 'rgba(255,255,255,0.25)';
+        ctx.beginPath(); ctx.arc(x - 27 + n * 18, 538, 4.5, 0, Math.PI * 2); ctx.fill();
+      });
+    } else txt(l2, x, 525, 16, '#c9b89f');
   });
-  let prompt = 'Naciśnij A na padzie lub ENTER – gra lokalna';
+  let prompt = kind === 'human' ? 'A lub ENTER – gra we dwoje   ·   ◀ ▶ – gra z botem' : 'A lub ENTER – start   ·   ◀ ▶ – zmiana partnera';
   if (net.mode === 'host') prompt = !net.ready ? 'Tworzę pokój…' : net.connected ? 'Druga osoba jest online! Naciśnij A lub ENTER' : 'Czekam na drugą osobę…';
   if (net.mode === 'guest') prompt = net.connected ? 'Połączono! A lub ENTER zaczyna grę' : 'Łączę z pokojem…';
   if (Math.floor(S.t * 2) % 2 === 0) txt(prompt, W / 2, 582, 28, '#ffd54a');
@@ -1757,7 +2164,8 @@ function drawEnd() {
     fav = `🏆 Ulubiony wnuk babci: ${w.name} (${a.score} : ${b.score})`;
   }
   txt(fav, W / 2, 570, 30, '#ffd54a');
-  if (S.endT > 2 && Math.floor(S.t * 2) % 2 === 0) txt('A lub ENTER – jeszcze raz', W / 2, 660, 28, '#fff');
+  if (S.endT > 2 && Math.floor(S.t * 2) % 2 === 0) txt('A lub ENTER – jeszcze raz', W / 2, 640, 28, '#fff');
+  if (S.endT > 1 && net.mode === 'local') txt('X lub ESC – zmiana partnera', W / 2, 686, 20, '#c9b89f');
 }
 
 function render() {
@@ -1793,7 +2201,8 @@ function frame(now) {
 
 newGame('title');
 uiSync();
-window.__pierogi = { get S() { return S; }, update, render, keys, ST, DOG_SPOTS, net, snapshot, applySnapshot, netInputFrame };
+window.__pierogi = { get S() { return S; }, update, render, keys, ST, DOG_SPOTS, net, snapshot, applySnapshot, netInputFrame,
+  setPartner(k) { partner = k; }, newGame };
 // link z kodem pokoju = od razu dołączamy
 const linkCode = normCode(new URLSearchParams(location.search).get('pokoj'));
 if (linkCode) joinRoom(linkCode);

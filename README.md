@@ -12,6 +12,18 @@ Otwórz `index.html` w przeglądarce (Chrome, Edge, Firefox). Nie trzeba nic ins
 
 Grę można też opublikować przez GitHub Pages (Settings → Pages → gałąź `main`), wtedy działa pod linkiem.
 
+## Gra z botem (jedna osoba)
+
+Na ekranie tytułowym prawa karta pokazuje, kto będzie Graczem 2. Zmienia się to ruchem w lewo lub w prawo (pad albo klawiatura) lub kliknięciem w strzałki. Gdy podłączony jest najwyżej jeden pad, domyślnie wybrany jest bot, przy dwóch padach drugi człowiek.
+
+| Partner | Jak gra |
+|---|---|
+| 🧒 Kuzyn Franek | Lepi własne pierogi od ciasta do stołu, jeden na raz. Wolniej lepi, wyjmuje z garnka „na oko”, koty i kipiący garnek zauważa z opóźnieniem, czasem się zagapi. Nie omija mąki ani wujka. |
+| 👧 Kuzynka Ola | Robi wszystko: lepi, pilnuje garnka (wyjmuje idealne), gasi kipienie, goni koty, omija mąkę i wujka. Odpuszcza zadanie, gdy jesteś wyraźnie bliżej, i łapie to, co do niej rzucisz. |
+| 🧑‍🍳 Kuzyn Staś | Nie lepi. Pilnuje garnka, przegania koty i nosi ugotowane pierogi na stół. Lepienie i wrzucanie do garnka należy do Ciebie. |
+
+W grze z botem Gracz 1 może używać obu układów klawiszy. Bot naciska te same „przyciski” co człowiek, więc obowiązują go te same reguły. Po rundzie **X** lub **Esc** wraca do wyboru partnera. Boty działają tylko w grze lokalnej, nie online.
+
 ## Gra online (dwa komputery)
 
 Gra musi być otwarta z adresu WWW (np. GitHub Pages), żeby druga osoba mogła wejść tym samym linkiem.
@@ -38,7 +50,7 @@ Własny serwer pokoi (PeerServer) można wskazać parametrami adresu: `?peerhost
 | Akcja | Pad | Gracz 1 (klawiatura) | Gracz 2 (klawiatura) |
 |---|---|---|---|
 | Ruch | lewa gałka / krzyżak | W A S D | strzałki |
-| Weź / odłóż / przegoń kota / podkradnij | A | F | K |
+| Weź / odłóż / przegoń kota / podkradnij / użyj szczotki | A | F | K |
 | Rzut (przytrzymaj, żeby ustawić siłę, puść, żeby rzucić) | X (lub B) | G | L |
 | Lepienie (na zmianę) | LB / RB (lub LT / RT) | Q / E | I / O |
 
@@ -53,6 +65,15 @@ W grze lokalnej pierwszy wykryty pad steruje Graczem 1, drugi Graczem 2. Klawiat
 5. **Stół**: podaj.
 
 Przedmioty można rzucać do partnera, który złapie je sam, jeśli ma wolne ręce. Przytrzymanie przycisku rzutu uruchamia wskaźnik siły, który chodzi tam i z powrotem. Im wyższa siła w chwili puszczenia, tym dalej poleci pieróg, a kółko na podłodze pokazuje, gdzie spadnie. W trakcie celowania chodzi się wolniej. Celny rzut surowym pierogiem do garnka też się liczy, a ugotowanym prosto na stół daje premię.
+
+## Szczotki
+
+Pod górną ścianą, w strefie „SZCZOTKI”, stoją dwie szczotki. Z wolnymi rękami podejdź i naciśnij **A**, żeby wziąć tę, która jest bliżej. Żeby odłożyć, wróć do tej samej strefy i naciśnij **A**. Puste miejsce pokazuje blady zarys szczotki. Szczotek nie da się rzucać, a z zajętymi rękami nie zrobisz pieroga, więc warto je odkładać.
+
+- **Zmiotka**: **A** to ruch zamiatania. Jeśli stoisz przy plamie mąki, plama znika.
+- **Szczotka do czesania psa**: podejdź z nią do Nory i naciśnij **A**. Nora mówi „O nie, czesania to ja nie zniosę!” i wychodzi z kuchni.
+
+Ze szczotką w ręku nadal można przegonić kota i zgasić kipiący garnek. Boty nie używają szczotek, ale leżącą Norę obchodzą.
 
 ## Punktacja
 
@@ -79,8 +100,8 @@ Wynik jest wspólny i to on decyduje o ocenie babci (od „Głodni pójdą…”
 - **Trzeci kot** wchodzi tymi samymi drzwiami i chodzi na zmianę: raz do farszu, raz do garnka. Przegania się go tak samo.
 - **Wujek Zbyszek** wchodzi dolnymi drzwiami i goni tego, kto niesie ugotowanego pieroga. Nie da się go przegonić, trzeba go omijać albo przerzucać pierogi nad nim.
 - **Kipiący garnek**: naciśnij A przy garnku w ciągu kilku sekund, inaczej wszystko się rozgotuje.
-- **Suczka Nora**: złocistoruda suczka z ciemnymi uszami, siwym pyskiem i białymi łapami wchodzi na początku rundy i kładzie się spać w jednym z przejść (między garnkiem a stołem, ciastem a farszem, farszem a stolnicą albo stolnicą a garnkiem). Nie da się przez nią przejść, trzeba ją obejść, za to rzucane pierogi przelatują nad nią. Co 60–90 sekund (czas jest losowany) wstaje i przenosi się w inne przejście.
-- **Mąka na podłodze**: poślizg i chwilowa utrata kontroli. Upuszczone ciasto też zostawia plamę.
+- **Suczka Nora**: złocistoruda suczka z ciemnymi uszami, siwym pyskiem i białymi łapami wchodzi na początku rundy i kładzie się spać w jednym z przejść (między garnkiem a stołem, ciastem a farszem, farszem a stolnicą albo stolnicą a garnkiem). Nie da się przez nią przejść, trzeba ją obejść, za to rzucane pierogi przelatują nad nią. Co 60–90 sekund (czas jest losowany) wstaje i przenosi się w inne przejście. Zwykłe A na nią nie działa, ale boi się szczotki do czesania: wyczesana wychodzi z kuchni i wraca po 30–45 sekundach.
+- **Mąka na podłodze**: poślizg i chwilowa utrata kontroli. Upuszczone ciasto też zostawia plamę. Plama znika sama po kilkunastu sekundach albo od razu po zamieceniu zmiotką.
 
 ## Technologia
 
