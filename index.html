@@ -4,13 +4,54 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pierogi na czas</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥟</text></svg>">
 <style>
   html, body { margin: 0; height: 100%; background: #24170f; overflow: hidden; }
-  canvas { display: block; width: 100vw; height: 100vh; object-fit: contain; }
+  #wrap { position: fixed; inset: 0; background: #24170f; }
+  canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
+  [hidden] { display: none !important; }
+  /* warstwa HTML skalowana razem z canvasem (1280x720) */
+  #ui { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; transform-origin: 0 0; pointer-events: none; }
+  #lobby { position: absolute; left: 140px; top: 612px; width: 1000px; height: 100px; box-sizing: border-box; pointer-events: auto;
+    background: #35251a; border: 2px solid #5b4330; border-radius: 16px; padding: 8px 18px; color: #f1e2c4;
+    font: bold 18px "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 6px; }
+  #lobby .row { display: flex; gap: 12px; align-items: center; white-space: nowrap; }
+  #lobby button { font: inherit; padding: 7px 16px; border-radius: 10px; border: 0; background: #ffd54a; color: #3a2616; cursor: pointer; }
+  #lobby button.ghost { background: transparent; color: #f1e2c4; border: 2px solid #a89a8a; padding: 5px 14px; }
+  #lobby input { font: inherit; padding: 6px 10px; border-radius: 10px; border: 2px solid #a89a8a; background: #2b1d14; color: #fff; }
+  #codeInput { width: 120px; text-transform: uppercase; text-align: center; letter-spacing: 3px; }
+  #roomLink { width: 330px; font-weight: normal; font-size: 15px; }
+  #roomCode { font-size: 28px; color: #ffd54a; letter-spacing: 4px; }
+  #netStatus { font-size: 16px; min-height: 20px; color: #c9b89f; font-weight: normal; }
 </style>
 </head>
 <body>
+<div id="wrap">
 <canvas id="game" width="1280" height="720"></canvas>
+<div id="ui">
+  <div id="lobby">
+    <div class="row" id="lobbyLocal">
+      <span>🌐 Gra online:</span>
+      <button id="btnHost">Załóż pokój</button>
+      <span>albo dołącz:</span>
+      <input id="codeInput" maxlength="8" placeholder="KOD" autocomplete="off" spellcheck="false">
+      <button id="btnJoin">Dołącz</button>
+    </div>
+    <div class="row" id="lobbyHost" hidden>
+      <span>Kod pokoju:</span><span id="roomCode"></span>
+      <input id="roomLink" readonly>
+      <button id="btnCopy">Kopiuj link</button>
+      <button id="btnCloseRoom" class="ghost">Zamknij pokój</button>
+    </div>
+    <div class="row" id="lobbyGuest" hidden>
+      <span id="guestLbl"></span>
+      <button id="btnLeave" class="ghost">Rozłącz</button>
+    </div>
+    <div id="netStatus"></div>
+  </div>
+</div>
+</div>
 <script>
 (() => {
 'use strict';
@@ -75,6 +116,22 @@ const pick = arr => arr[Math.floor(Math.random() * arr.length)];
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
+// ---------------------------------------------------------------- stan sieci
+// Tryb online: host liczy całą grę, gość wysyła wejścia i dostaje migawki stanu.
+const ROOM_PREFIX = 'pierogi-na-czas-';
+const SNAP_EVERY = 2;            // host wysyła stan co 2 klatki (ok. 30 razy na sekundę)
+const STALE_MS = 3000;           // tyle ciszy = „brak sygnału”
+const DROP_MS = 8000;            // tyle ciszy = host uznaje gościa za rozłączonego
+const NET_EVENTS = ['a', 'l', 'r', 'start', 'xd', 'xu'];
+const net = {
+  mode: 'local',                 // 'local' | 'host' | 'guest'
+  peer: null, conn: null, code: '', status: '', ready: false, connected: false,
+  lastRecv: 0, rtt: null, frame: 0, beeps: [], joinTimer: null, tries: 0,
+  inp: { mx: 0, my: 0, xHeld: false, queue: [] },   // host: wejście gościa
+  sent: { mx: 0, my: 0, x: false, t: 0 },           // gość: co ostatnio wysłał
+};
+const netStale = () => net.connected && Date.now() - net.lastRecv > STALE_MS;
+
 // ---------------------------------------------------------------- dźwięk
 let AC = null;
 function audioInit() {
@@ -84,6 +141,7 @@ function audioInit() {
   } catch (e) { /* brak dźwięku to nie tragedia */ }
 }
 function beep(freq, dur = 0.08, type = 'square', vol = 0.05) {
+  if (net.mode === 'host' && net.connected && net.beeps.length < 32) net.beeps.push([freq, dur, type, vol]);
   if (!AC || AC.state !== 'running') return;
   try {
     const o = AC.createOscillator(), g = AC.createGain();
@@ -102,17 +160,20 @@ const KB = [
   { up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD', a: 'KeyF', x: 'KeyG', l: 'KeyQ', r: 'KeyE' },
   { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', a: 'KeyK', x: 'KeyL', l: 'KeyI', r: 'KeyO' },
 ];
+const wrap = document.getElementById('wrap');
+const isTyping = e => !!(e.target && e.target.tagName === 'INPUT');
 window.addEventListener('keydown', e => {
+  audioInit();
+  if (isTyping(e)) return;
   keys[e.code] = true;
   if (e.code === 'Enter') startRequested = true;
   if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
-  audioInit();
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 window.addEventListener('pointerdown', audioInit);
 canvas.addEventListener('dblclick', () => {
   if (document.fullscreenElement) document.exitFullscreen();
-  else if (canvas.requestFullscreen) canvas.requestFullscreen().catch(() => {});
+  else if (wrap.requestFullscreen) wrap.requestFullscreen().catch(() => {});
 });
 
 function getPads() {
@@ -120,10 +181,10 @@ function getPads() {
   return Array.from(navigator.getGamepads()).filter(p => p && p.connected);
 }
 
+// slot = który zestaw „poprzednich przycisków”, padIdx = który pad, kbs = zestawy klawiszy
 const prevBtn = [{}, {}];
-function readInput(i) {
-  const pad = getPads()[i];
-  const k = KB[i];
+function readDevice(slot, padIdx, kbs) {
+  const pad = getPads()[padIdx];
   let mx = 0, my = 0, a = false, x = false, l = false, r = false, start = false;
   if (pad) {
     const b = n => !!(pad.buttons[n] && pad.buttons[n].pressed);
@@ -133,14 +194,16 @@ function readInput(i) {
     if (b(12)) my = -1; if (b(13)) my = 1;
     a = b(0); x = b(2) || b(1); l = b(4) || b(6); r = b(5) || b(7); start = b(9);
   }
-  if (keys[k.left]) mx = -1; if (keys[k.right]) mx = 1;
-  if (keys[k.up]) my = -1; if (keys[k.down]) my = 1;
-  a = a || !!keys[k.a]; x = x || !!keys[k.x]; l = l || !!keys[k.l]; r = r || !!keys[k.r];
+  for (const k of kbs) {
+    if (keys[k.left]) mx = -1; if (keys[k.right]) mx = 1;
+    if (keys[k.up]) my = -1; if (keys[k.down]) my = 1;
+    a = a || !!keys[k.a]; x = x || !!keys[k.x]; l = l || !!keys[k.l]; r = r || !!keys[k.r];
+  }
   const len = Math.hypot(mx, my);
   if (len > 1) { mx /= len; my /= len; }
-  const pr = prevBtn[i];
+  const pr = prevBtn[slot];
   const out = { mx, my, a: a && !pr.a, x: x && !pr.x, xHeld: x, l: l && !pr.l, r: r && !pr.r, start: start && !pr.start };
-  prevBtn[i] = { a, x, l, r, start };
+  prevBtn[slot] = { a, x, l, r, start };
   return out;
 }
 
@@ -537,8 +600,7 @@ function separatePlayers() {
   b.x += nx * push * wb; b.y += ny * push * wb;
 }
 
-function update(dt) {
-  const inp = [readInput(0), readInput(1)];
+function simulate(dt, inp) {
   const anyStart = startRequested || inp.some(i => i.a || i.start);
   startRequested = false;
   S.t += dt;
@@ -550,7 +612,8 @@ function update(dt) {
   }
 
   if (S.phase === 'title') {
-    if (anyStart) { audioInit(); newGame('countdown'); }
+    // online host startuje dopiero, gdy druga osoba jest połączona
+    if (anyStart && (net.mode !== 'host' || net.connected)) { audioInit(); newGame('countdown'); }
     return;
   }
   if (S.phase === 'countdown') {
@@ -583,6 +646,381 @@ function update(dt) {
     beep(440, 0.2); setTimeout(() => beep(330, 0.4), 200);
   }
 }
+
+// ---------------------------------------------------------------- sieć: migawki stanu
+const r1 = v => Math.round(v * 10) / 10, r2 = v => Math.round(v * 100) / 100;
+
+function snapshot() {
+  return {
+    phase: S.phase, t: r2(S.t), time: r2(S.time), countdown: r2(S.countdown), endT: r2(S.endT),
+    score: S.score, streak: S.streak, stats: S.stats,
+    players: S.players.map(p => ({
+      x: r1(p.x), y: r1(p.y), fx: r2(p.fx), fy: r2(p.fy), hold: p.hold,
+      lock: p.lock ? S.boards.indexOf(p.lock) : -1, slide: r2(Math.max(0, p.slide)),
+      charging: p.charging, chargeT: r2(p.chargeT), score: p.score,
+    })),
+    boards: S.boards.map(b => ({ user: b.user ? b.user.i : -1, progress: b.progress, next: b.next })),
+    pot: { items: S.pot.items.map(it => r2(it.t)), kipi: S.pot.kipi },
+    cats: S.cats.map(c => ({ state: c.state, target: c.target, x: r1(c.x), y: r1(c.y) })),
+    uncle: { state: S.uncle.state, x: r1(S.uncle.x), y: r1(S.uncle.y) },
+    flour: S.flour.map(f => ({ x: r1(f.x), y: r1(f.y), r: f.r, ttl: r2(f.ttl) })),
+    shots: S.shots.map(s => ({ item: s.item, x: r1(s.x), y: r1(s.y), vx: r1(s.vx), vy: r1(s.vy), t: r2(s.t), life: r2(s.life), h: r1(s.h) })),
+    floats: S.floats.map(f => ({ text: f.text, x: r1(f.x), y: r1(f.y), color: f.color, size: f.size, t: r2(f.t) })),
+    granny: { text: S.granny.text, t: r2(Math.min(S.granny.t, 99)) },
+  };
+}
+
+// gość: cel ruchu trafia do tx/ty, a pozycja na ekranie płynnie go dogania
+function setTarget(o, x, y, snap) {
+  o.tx = x; o.ty = y;
+  if (snap || Math.hypot(o.x - x, o.y - y) > 160) { o.x = x; o.y = y; }
+}
+
+function applySnapshot(d) {
+  S.phase = d.phase; S.t = d.t; S.time = d.time; S.countdown = d.countdown; S.endT = d.endT;
+  S.score = d.score; S.streak = d.streak; Object.assign(S.stats, d.stats);
+  d.players.forEach((q, i) => {
+    const p = S.players[i];
+    setTarget(p, q.x, q.y, false);
+    p.fx = q.fx; p.fy = q.fy; p.hold = q.hold; p.lock = q.lock >= 0 ? S.boards[q.lock] : null;
+    p.slide = q.slide; p.charging = q.charging; p.chargeT = q.chargeT; p.score = q.score;
+  });
+  d.boards.forEach((q, i) => {
+    const b = S.boards[i];
+    b.user = q.user >= 0 ? S.players[q.user] : null; b.progress = q.progress; b.next = q.next;
+  });
+  S.pot.items = d.pot.items.map(t => ({ t })); S.pot.kipi = d.pot.kipi;
+  d.cats.forEach((q, i) => {
+    const c = S.cats[i];
+    setTarget(c, q.x, q.y, c.state === 'away');
+    c.state = q.state; c.target = q.target;
+  });
+  setTarget(S.uncle, d.uncle.x, d.uncle.y, S.uncle.state === 'away');
+  S.uncle.state = d.uncle.state;
+  S.flour = d.flour; S.shots = d.shots; S.floats = d.floats; S.granny = d.granny;
+}
+
+// ---------------------------------------------------------------- sieć: połączenie
+const el = {};
+['lobby', 'lobbyLocal', 'lobbyHost', 'lobbyGuest', 'btnHost', 'btnJoin', 'btnCopy', 'btnCloseRoom', 'btnLeave',
+  'codeInput', 'roomCode', 'roomLink', 'guestLbl', 'netStatus', 'ui'].forEach(id => { el[id] = document.getElementById(id); });
+
+const normCode = v => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8);
+function randomCode() {
+  const al = 'abcdefghjkmnpqrstuvwxyz23456789';
+  let c = '';
+  for (let i = 0; i < 5; i++) c += al[Math.floor(Math.random() * al.length)];
+  return c;
+}
+function roomLink() {
+  const u = new URL(location.href);
+  u.searchParams.set('pokoj', net.code.toUpperCase());
+  u.hash = '';
+  return u.toString();
+}
+
+function uiSync() {
+  el.lobbyLocal.hidden = net.mode !== 'local';
+  el.lobbyHost.hidden = net.mode !== 'host';
+  el.lobbyGuest.hidden = net.mode !== 'guest';
+  if (net.mode === 'host') {
+    el.roomCode.textContent = net.ready ? net.code.toUpperCase() : '…';
+    el.roomLink.value = net.ready ? roomLink() : '';
+  }
+  if (net.mode === 'guest') el.guestLbl.textContent = 'Pokój ' + net.code.toUpperCase();
+  el.netStatus.textContent = net.status;
+}
+
+function loadPeerLib() {
+  return new Promise((resolve, reject) => {
+    if (window.Peer) { resolve(); return; }
+    const sc = document.createElement('script');
+    sc.src = 'peerjs.min.js';
+    sc.onload = () => resolve();
+    sc.onerror = () => reject(new Error('peerjs'));
+    document.head.appendChild(sc);
+  });
+}
+
+// domyślnie darmowy broker PeerJS; ?peerhost=…&peerport=… pozwala wskazać własny PeerServer
+function peerOptions() {
+  const q = new URLSearchParams(location.search);
+  const o = { debug: 1 };
+  if (q.get('peerhost')) {
+    o.host = q.get('peerhost');
+    o.port = Number(q.get('peerport') || 443);
+    o.path = q.get('peerpath') || '/';
+    o.secure = q.get('peersecure') !== '0' && o.port === 443;
+  }
+  return o;
+}
+
+function netReset() {
+  if (net.joinTimer) clearTimeout(net.joinTimer);
+  const peer = net.peer;
+  net.peer = null; net.conn = null;
+  if (peer) { try { peer.destroy(); } catch (e) { /* już zamknięty */ } }
+  Object.assign(net, { mode: 'local', code: '', ready: false, connected: false, rtt: null, joinTimer: null, frame: 0 });
+  net.beeps.length = 0;
+  net.inp = { mx: 0, my: 0, xHeld: false, queue: [] };
+  net.sent = { mx: 0, my: 0, x: false, t: 0 };
+}
+
+// powrót do gry lokalnej (z komunikatem, czemu)
+function leaveOnline(msg) {
+  const wasGuest = net.mode === 'guest';
+  netReset();
+  net.status = msg || '';
+  if (wasGuest || S.phase !== 'title') newGame('title');
+  uiSync();
+}
+
+function attachConn(conn) {
+  net.conn = conn;
+  const opened = () => {
+    if (conn !== net.conn || net.connected) return;
+    net.connected = true; net.lastRecv = Date.now();
+    if (net.joinTimer) { clearTimeout(net.joinTimer); net.joinTimer = null; }
+    net.status = net.mode === 'host' ? 'Druga osoba dołączyła. Możecie zaczynać!' : 'Połączono z hostem.';
+    uiSync();
+  };
+  conn.on('open', opened);
+  conn.on('data', d => onData(conn, d));
+  conn.on('close', () => onConnLost(conn));
+  conn.on('error', () => onConnLost(conn));
+  if (conn.open) opened();
+}
+
+function onConnLost(conn) {
+  if (conn !== net.conn) return;
+  if (net.mode === 'guest') { leaveOnline('Połączenie z hostem zostało przerwane.'); return; }
+  net.conn = null; net.connected = false; net.rtt = null;
+  net.inp = { mx: 0, my: 0, xHeld: false, queue: [] };
+  net.status = 'Druga osoba się rozłączyła. Może wrócić tym samym linkiem.';
+  uiSync();
+}
+
+function onData(conn, d) {
+  if (conn !== net.conn || !d || typeof d !== 'object') return;
+  net.lastRecv = Date.now();
+  if (net.mode === 'host') {
+    if (d.t === 'i') {
+      const n = net.inp;
+      n.mx = Number.isFinite(d.mx) ? clamp(d.mx, -1, 1) : 0;
+      n.my = Number.isFinite(d.my) ? clamp(d.my, -1, 1) : 0;
+      if (Array.isArray(d.ev)) for (const e of d.ev) if (NET_EVENTS.includes(e) && n.queue.length < 120) n.queue.push(e);
+      if (Number.isFinite(d.rtt)) net.rtt = d.rtt;
+    } else if (d.t === 'ping') {
+      try { conn.send({ t: 'pong', c: d.c }); } catch (e) { /* zaraz i tak przyjdzie close */ }
+    } else if (d.t === 'bye') {
+      onConnLost(conn);
+      try { conn.close(); } catch (e) { /* nic */ }
+    }
+  } else if (net.mode === 'guest') {
+    if (d.t === 's') {
+      try { applySnapshot(d.s); } catch (e) { /* uszkodzona migawka, następna naprawi */ }
+      if (Array.isArray(d.b)) for (const b of d.b) beep(b[0], b[1], b[2], b[3]);
+    } else if (d.t === 'pong') {
+      if (Number.isFinite(d.c)) net.rtt = Math.max(0, Math.round(Date.now() - d.c));
+    } else if (d.t === 'full') {
+      leaveOnline('Ten pokój jest już pełny.');
+    }
+  }
+}
+
+async function hostRoom() {
+  netReset();
+  net.mode = 'host'; net.status = 'Tworzę pokój…'; net.tries = 0;
+  uiSync();
+  try { await loadPeerLib(); } catch (e) { leaveOnline('Nie udało się wczytać biblioteki sieciowej (peerjs.min.js).'); return; }
+  if (net.mode !== 'host') return;
+  openHostPeer();
+}
+
+function openHostPeer() {
+  net.code = randomCode();
+  const peer = net.peer = new window.Peer(ROOM_PREFIX + net.code, peerOptions());
+  peer.on('open', () => {
+    if (peer !== net.peer) return;
+    net.ready = true;
+    if (!net.connected) net.status = 'Pokój gotowy. Wyślij link albo kod drugiej osobie.';
+    uiSync();
+  });
+  peer.on('connection', conn => {
+    if (peer !== net.peer) return;
+    if (net.conn && net.connected && !netStale()) {
+      // ktoś trzeci: pokój jest dwuosobowy
+      conn.on('open', () => { try { conn.send({ t: 'full' }); } catch (e) { /* nic */ } setTimeout(() => conn.close(), 500); });
+      return;
+    }
+    const old = net.conn;
+    net.connected = false;
+    attachConn(conn);
+    if (old) { try { old.close(); } catch (e) { /* nic */ } }
+  });
+  peer.on('disconnected', () => {
+    // utrata serwera pokoi nie przerywa trwającej gry; próbujemy wrócić, żeby dało się dołączyć ponownie
+    setTimeout(() => { if (peer === net.peer && !peer.destroyed && peer.disconnected) peer.reconnect(); }, 2000);
+  });
+  peer.on('error', err => {
+    if (peer !== net.peer) return;
+    const type = (err && err.type) || 'nieznany';
+    if (type === 'unavailable-id' && !net.ready && net.tries++ < 5) {
+      net.peer = null;
+      try { peer.destroy(); } catch (e) { /* nic */ }
+      openHostPeer();
+    } else if (!net.ready) {
+      leaveOnline('Nie udało się połączyć z serwerem pokoi (' + type + '). Spróbuj ponownie.');
+    } else if (type !== 'peer-unavailable') {
+      net.status = 'Problem z serwerem pokoi (' + type + '). Trwająca gra działa dalej.';
+      uiSync();
+    }
+  });
+}
+
+async function joinRoom(code) {
+  code = normCode(code);
+  if (!code) { net.status = 'Wpisz kod pokoju.'; uiSync(); return; }
+  netReset();
+  if (S.phase !== 'title') newGame('title');
+  net.mode = 'guest'; net.code = code; net.status = 'Łączę z pokojem…';
+  uiSync();
+  try { await loadPeerLib(); } catch (e) { leaveOnline('Nie udało się wczytać biblioteki sieciowej (peerjs.min.js).'); return; }
+  if (net.mode !== 'guest' || net.code !== code) return;
+  const peer = net.peer = new window.Peer(peerOptions());
+  peer.on('open', () => {
+    if (peer !== net.peer) return;
+    attachConn(peer.connect(ROOM_PREFIX + code, { reliable: true, serialization: 'json' }));
+    net.joinTimer = setTimeout(() => {
+      if (peer === net.peer && !net.connected) leaveOnline('Nie udało się połączyć z pokojem ' + code.toUpperCase() + '. Wasze sieci mogą blokować połączenie bezpośrednie.');
+    }, 20000);
+  });
+  peer.on('error', err => {
+    if (peer !== net.peer) return;
+    const type = (err && err.type) || 'nieznany';
+    if (type === 'peer-unavailable') leaveOnline('Nie ma pokoju o kodzie ' + code.toUpperCase() + '. Sprawdź kod albo poproś o nowy link.');
+    else if (!net.connected) leaveOnline('Nie udało się połączyć (' + type + '). Spróbuj ponownie.');
+  });
+}
+
+// ---------------------------------------------------------------- sieć: klatka hosta i gościa
+// host: wejście gościa na tę klatkę; zdarzenia przycisków idą z kolejki, jedno na klatkę, w kolejności
+function netInputFrame() {
+  const n = net.inp;
+  const out = { mx: 0, my: 0, a: false, x: false, xHeld: false, l: false, r: false, start: false };
+  if (!net.connected || netStale()) { n.queue.length = 0; n.xHeld = false; return out; }
+  const ev = n.queue.shift();
+  if (ev === 'xd') n.xHeld = true;
+  else if (ev === 'xu') n.xHeld = false;
+  else if (ev) out[ev] = true;
+  out.mx = n.mx; out.my = n.my; out.xHeld = n.xHeld;
+  return out;
+}
+
+function hostSend() {
+  const c = net.conn;
+  if (!net.connected || !c || !c.open) return;
+  if (++net.frame % SNAP_EVERY) return;
+  if (c.dataChannel && c.dataChannel.bufferedAmount > 200000) return;   // łącze nie nadąża: pomiń migawkę
+  try { c.send({ t: 's', s: snapshot(), b: net.beeps.splice(0) }); } catch (e) { /* close przyjdzie osobno */ }
+}
+
+function guestSend(li) {
+  const c = net.conn;
+  if (!net.connected || !c || !c.open) return;
+  const now = Date.now(), st = net.sent, ev = [];
+  if (li.a) ev.push('a');
+  if (li.l) ev.push('l');
+  if (li.r) ev.push('r');
+  if (li.start || startRequested) ev.push('start');
+  if (li.xHeld !== st.x) { ev.push(li.xHeld ? 'xd' : 'xu'); st.x = li.xHeld; }
+  const mx = r2(li.mx), my = r2(li.my);
+  try {
+    if (ev.length || mx !== st.mx || my !== st.my || now - st.t > 400) {
+      c.send({ t: 'i', mx, my, ev, rtt: net.rtt });
+      st.mx = mx; st.my = my; st.t = now;
+    }
+  } catch (e) { /* close przyjdzie osobno */ }
+}
+
+// gość: ping co sekundę z timera (działa też w karcie w tle), mierzy opóźnienie i daje znak życia
+setInterval(() => {
+  const c = net.conn;
+  if (net.mode !== 'guest' || !net.connected || !c || !c.open) return;
+  try { c.send({ t: 'ping', c: Date.now() }); } catch (e) { /* nic */ }
+}, 1000);
+// gość zamyka kartę: daj znać hostowi od razu, zamiast czekać na timeout
+window.addEventListener('pagehide', () => {
+  const c = net.conn;
+  if (net.mode === 'guest' && c && c.open) { try { c.send({ t: 'bye' }); } catch (e) { /* nic */ } }
+});
+
+// gość nie liczy gry: wysyła wejście i wygładza obraz między migawkami
+function guestFrame(dt) {
+  guestSend(readDevice(0, 0, KB));
+  startRequested = false;
+  S.t += dt;
+  S.granny.t -= dt;
+  if (S.phase === 'play') S.time = Math.max(0, S.time - dt);
+  if (S.phase === 'countdown') S.countdown -= dt;
+  if (S.phase === 'end') S.endT += dt;
+  const k = 1 - Math.exp(-dt * 18);
+  for (const o of [...S.players, ...S.cats, S.uncle]) {
+    if (o.tx === undefined) continue;
+    o.x += (o.tx - o.x) * k; o.y += (o.ty - o.y) * k;
+  }
+  for (const p of S.players) if (p.charging) p.chargeT += dt;
+  for (const it of S.pot.items) it.t += dt;
+  for (const s of S.shots) {
+    if (s.t >= s.life) continue;
+    s.t += dt;
+    s.x = clamp(s.x + s.vx * dt, FLOOR.x0 + 10, FLOOR.x1 - 10);
+    s.y = clamp(s.y + s.vy * dt, FLOOR.y0 + 10, FLOOR.y1 - 10);
+  }
+  for (const f of S.floats) { f.t += dt; f.y -= 40 * dt; }
+}
+
+function update(dt) {
+  if (net.mode === 'guest') { guestFrame(dt); return; }
+  if (net.mode === 'host') {
+    if (net.connected && Date.now() - net.lastRecv > DROP_MS) {
+      const c = net.conn;
+      onConnLost(c);
+      try { c.close(); } catch (e) { /* nic */ }
+    }
+    simulate(dt, [readDevice(0, 0, KB), netInputFrame()]);
+    hostSend();
+    return;
+  }
+  simulate(dt, [readDevice(0, 0, [KB[0]]), readDevice(1, 1, [KB[1]])]);
+}
+
+// ---------------------------------------------------------------- lobby (HTML)
+function layoutUi() {
+  const sc = Math.min(window.innerWidth / W, window.innerHeight / H);
+  const ox = (window.innerWidth - W * sc) / 2, oy = (window.innerHeight - H * sc) / 2;
+  el.ui.style.transform = `translate(${ox}px, ${oy}px) scale(${sc})`;
+}
+window.addEventListener('resize', layoutUi);
+layoutUi();
+
+el.btnHost.addEventListener('click', e => { e.currentTarget.blur(); audioInit(); hostRoom(); });
+el.btnJoin.addEventListener('click', e => { e.currentTarget.blur(); audioInit(); joinRoom(el.codeInput.value); });
+el.codeInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.target.blur(); joinRoom(el.codeInput.value); } });
+el.btnCloseRoom.addEventListener('click', e => { e.currentTarget.blur(); leaveOnline('Pokój zamknięty.'); });
+el.btnLeave.addEventListener('click', e => { e.currentTarget.blur(); leaveOnline('Rozłączono.'); });
+el.btnCopy.addEventListener('click', async e => {
+  e.currentTarget.blur();
+  if (!net.ready) return;
+  try {
+    await navigator.clipboard.writeText(roomLink());
+    net.status = 'Link skopiowany. Wyślij go drugiej osobie.';
+  } catch (err) {
+    el.roomLink.focus(); el.roomLink.select();
+    net.status = 'Zaznaczyłem link, skopiuj go przez Ctrl+C.';
+  }
+  uiSync();
+});
 
 // ---------------------------------------------------------------- rysowanie
 function rr(x, y, w, h, r) {
@@ -929,7 +1367,8 @@ function drawHud() {
   ctx.fillStyle = '#3a2616'; ctx.fillRect(0, 0, W, 108);
   S.players.forEach((p, i) => {
     const x = i === 0 ? 40 : W - 40, al = i === 0 ? 'left' : 'right';
-    txt(p.face + ' ' + p.name, x, 36, 26, p.color === '#3b82c4' ? '#7fb9ee' : '#f28bb0', al);
+    const me = (net.mode === 'host' && i === 0) || (net.mode === 'guest' && i === 1);
+    txt(p.face + ' ' + p.name + (me ? ' (Ty)' : ''), x, 36, 26, p.color === '#3b82c4' ? '#7fb9ee' : '#f28bb0', al);
     txt('wkład: ' + p.score, x, 76, 24, '#fff', al);
   });
   const sec = Math.ceil(S.time), mm = Math.floor(sec / 60), ss = String(sec % 60).padStart(2, '0');
@@ -946,7 +1385,13 @@ function drawHud() {
     ctx.beginPath(); ctx.moveTo(112, 670); ctx.lineTo(92, 678); ctx.lineTo(112, 688); ctx.closePath(); ctx.fill();
     txt(S.granny.text, 130, 679, 22, '#3a2616', 'left');
   }
-  txt('A – akcja   X (trzymaj i puść) – rzut   LB/RB – lepienie', W - 30, 679, 16, '#c9b89f', 'right');
+  let hint = 'A – akcja   X (trzymaj i puść) – rzut   LB/RB – lepienie', hintCol = '#c9b89f';
+  if (net.mode !== 'local') {
+    if (!net.connected) { hint = net.mode === 'host' ? 'ONLINE · druga osoba niepołączona' : 'ONLINE · łączenie…'; hintCol = '#ff9a8a'; }
+    else if (netStale()) { hint = 'ONLINE · brak sygnału od drugiej osoby'; hintCol = '#ff9a8a'; }
+    else { hint = 'ONLINE · pokój ' + net.code.toUpperCase() + (net.rtt !== null ? ' · ping ' + net.rtt + ' ms' : ''); hintCol = '#9cf07a'; }
+  }
+  txt(hint, W - 30, 679, 16, hintCol, 'right');
 }
 
 function overlay(alpha) {
@@ -984,16 +1429,31 @@ function drawTitle() {
   tips.forEach((s, i) => txt('• ' + s, 660, 214 + i * 34, 18, '#f1e2c4', 'left'));
 
   const pads = getPads();
+  const padLine = ok => ok ? '🎮 pad podłączony' : 'pad: brak (naciśnij dowolny przycisk na padzie)';
+  const kbBoth = 'klawiatura: WASD lub strzałki, F/K = A, G/L = X, Q/E lub I/O = LB/RB';
   [0, 1].forEach(i => {
     const x = i === 0 ? W / 2 - 300 : W / 2 + 300;
-    const ok = !!pads[i];
-    ctx.fillStyle = 'rgba(255,255,255,0.08)'; rr(x - 250, 440, 500, 120, 16); ctx.fill();
-    txt(PLAYER_STYLE[i].face + ' ' + PLAYER_STYLE[i].name, x, 468, 26, i === 0 ? '#7fb9ee' : '#f28bb0');
-    txt(ok ? '🎮 pad podłączony' : 'pad: brak (naciśnij dowolny przycisk na padzie)', x, 504, 19, ok ? '#9cf07a' : '#c9b89f');
-    txt(i === 0 ? 'klawiatura: WASD, F = A, G = X, Q/E = LB/RB' : 'klawiatura: strzałki, K = A, L = X, I/O = LB/RB', x, 536, 17, '#c9b89f');
+    let name = PLAYER_STYLE[i].face + ' ' + PLAYER_STYLE[i].name, l1, l1ok, l2;
+    const me = (net.mode === 'host' && i === 0) || (net.mode === 'guest' && i === 1);
+    if (net.mode === 'local') {
+      l1ok = !!pads[i]; l1 = padLine(l1ok);
+      l2 = i === 0 ? 'klawiatura: WASD, F = A, G = X, Q/E = LB/RB' : 'klawiatura: strzałki, K = A, L = X, I/O = LB/RB';
+    } else if (me) {
+      name += ' (Ty)'; l1ok = !!pads[0]; l1 = padLine(l1ok); l2 = kbBoth;
+    } else {
+      name += ' (online)'; l1ok = net.connected && !netStale();
+      l1 = l1ok ? '🌐 połączony' + (net.rtt !== null ? ' · ping ' + net.rtt + ' ms' : '') : (net.mode === 'host' ? 'czekam, aż dołączy…' : 'łączenie z hostem…');
+      l2 = net.mode === 'host' ? 'gra u siebie, tu widać ruchy na żywo' : 'host liczy grę i wysyła obraz stanu';
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'; rr(x - 290, 432, 580, 116, 16); ctx.fill();
+    txt(name, x, 460, 26, i === 0 ? '#7fb9ee' : '#f28bb0');
+    txt(l1, x, 494, 19, l1ok ? '#9cf07a' : '#c9b89f');
+    txt(l2, x, 525, 16, '#c9b89f');
   });
-  if (Math.floor(S.t * 2) % 2 === 0) txt('Naciśnij A na padzie lub ENTER, żeby zacząć', W / 2, 610, 30, '#ffd54a');
-  txt('Dwuklik = pełny ekran', W / 2, 655, 16, '#a89a8a');
+  let prompt = 'Naciśnij A na padzie lub ENTER – gra lokalna';
+  if (net.mode === 'host') prompt = !net.ready ? 'Tworzę pokój…' : net.connected ? 'Druga osoba jest online! Naciśnij A lub ENTER' : 'Czekam na drugą osobę…';
+  if (net.mode === 'guest') prompt = net.connected ? 'Połączono! A lub ENTER zaczyna grę' : 'Łączę z pokojem…';
+  if (Math.floor(S.t * 2) % 2 === 0) txt(prompt, W / 2, 582, 28, '#ffd54a');
 }
 
 function rating(score) {
@@ -1045,20 +1505,31 @@ function render() {
     txt(String(Math.max(1, Math.ceil(S.countdown))), W / 2, H / 2, 200, '#ffd54a', 'center', '#3a2616');
     txt('Zakasać rękawy!', W / 2, H / 2 + 140, 36, '#fff', 'center', '#3a2616');
   } else if (S.phase === 'end') drawEnd();
+  if (net.mode === 'guest' && S.phase !== 'title' && netStale()) {
+    overlay(0.6);
+    txt('Brak sygnału od hosta…', W / 2, H / 2, 44, '#ffd54a', 'center', '#3a2616');
+    txt('Karta z grą u hosta musi być otwarta i widoczna.', W / 2, H / 2 + 56, 22, '#fff', 'center', '#3a2616');
+  }
 }
 
 // ---------------------------------------------------------------- pętla
-let last = 0;
+let last = 0, lobbyShown = null;
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000 || 0);
   last = now;
   update(dt);
   render();
+  const showLobby = S.phase === 'title';
+  if (showLobby !== lobbyShown) { lobbyShown = showLobby; el.lobby.hidden = !showLobby; }
   requestAnimationFrame(frame);
 }
 
 newGame('title');
-window.__pierogi = { get S() { return S; }, update, render, keys, ST };
+uiSync();
+window.__pierogi = { get S() { return S; }, update, render, keys, ST, net, snapshot, applySnapshot, netInputFrame };
+// link z kodem pokoju = od razu dołączamy
+const linkCode = normCode(new URLSearchParams(location.search).get('pokoj'));
+if (linkCode) joinRoom(linkCode);
 requestAnimationFrame(frame);
 })();
 </script>

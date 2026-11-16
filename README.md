@@ -1,16 +1,37 @@
 # Pierogi na czas 🥟
 
-Zręcznościowa gra dla dwóch osób na pady. Wigilia u babci Halinki, goście przyjdą za 3 minuty, a w kuchni chaos. Ulepcie i podajcie jak najwięcej pierogów, zanim kot zje farsz, a wujek Zbyszek resztę.
+Zręcznościowa gra dla dwóch osób na pady, do grania na jednym komputerze albo online z dwóch różnych miejsc. Wigilia u babci Halinki, goście przyjdą za 3 minuty, a w kuchni chaos. Ulepcie i podajcie jak najwięcej pierogów, zanim kot zje farsz, a wujek Zbyszek resztę.
 
 ## Uruchomienie
 
-Otwórz `index.html` w przeglądarce (Chrome, Edge, Firefox). Nie trzeba nic instalować ani budować, cała gra to jeden plik.
+Otwórz `index.html` w przeglądarce (Chrome, Edge, Firefox). Nie trzeba nic instalować ani budować: gra to `index.html` plus biblioteka `peerjs.min.js`, wczytywana tylko w trybie online.
 
 1. Podłącz dwa pady (USB lub Bluetooth) i naciśnij na każdym dowolny przycisk, żeby przeglądarka je wykryła.
 2. Naciśnij **A** na padzie albo **Enter**.
 3. Dwuklik na grze włącza pełny ekran.
 
 Grę można też opublikować przez GitHub Pages (Settings → Pages → gałąź `main`), wtedy działa pod linkiem.
+
+## Gra online (dwa komputery)
+
+Gra musi być otwarta z adresu WWW (np. GitHub Pages), żeby druga osoba mogła wejść tym samym linkiem.
+
+1. Pierwsza osoba (host) na ekranie tytułowym klika **Załóż pokój**. Pojawi się kod pokoju i link.
+2. Host wysyła link drugiej osobie (przycisk **Kopiuj link**). Zamiast linku można wpisać sam kod w polu **KOD** i kliknąć **Dołącz**.
+3. Gdy druga osoba dołączy, dowolne z Was naciska **A** lub **Enter** i runda rusza.
+
+Host jest Graczem 1, osoba dołączająca Graczem 2. Każdy gra na swoim padzie (pierwszym wykrytym) albo na klawiaturze, przy czym online działają oba układy klawiszy naraz. W prawym dolnym rogu widać stan połączenia i ping.
+
+Jak to działa i czego się spodziewać:
+
+- Całą grę liczy przeglądarka hosta. Gość wysyła tylko swoje przyciski i około 30 razy na sekundę dostaje aktualny stan, więc swoje ruchy widzi z opóźnieniem równym pingowi.
+- Połączenie jest bezpośrednie między przeglądarkami (WebRTC). Do samego zestawienia go służy darmowy publiczny serwer PeerJS, który nie daje gwarancji dostępności. Gdy nie działa, nie da się założyć pokoju ani dołączyć, ale gra lokalna działa normalnie.
+- Przy niektórych routerach i sieciach firmowych połączenie bezpośrednie może się nie zestawić. Wtedy pomaga inna sieć (np. hotspot z telefonu).
+- Karta z grą u hosta musi być otwarta i widoczna. Przeglądarki wstrzymują grę w karcie schowanej w tle, a gość widzi wtedy „Brak sygnału od hosta”.
+- Jeśli gość straci połączenie, może wrócić tym samym linkiem, także w trakcie rundy. Jeśli host zamknie kartę, pokój znika i trzeba założyć nowy.
+- Gra nie przenosi głosu, do rozmowy potrzebny jest osobny telefon lub komunikator.
+
+Własny serwer pokoi (PeerServer) można wskazać parametrami adresu: `?peerhost=adres&peerport=443`.
 
 ## Sterowanie
 
@@ -21,7 +42,7 @@ Grę można też opublikować przez GitHub Pages (Settings → Pages → gałą�
 | Rzut (przytrzymaj, żeby ustawić siłę, puść, żeby rzucić) | X (lub B) | G | L |
 | Lepienie (na zmianę) | LB / RB (lub LT / RT) | Q / E | I / O |
 
-Pierwszy wykryty pad steruje Graczem 1, drugi Graczem 2. Klawiatura działa równolegle, więc można grać też bez padów.
+W grze lokalnej pierwszy wykryty pad steruje Graczem 1, drugi Graczem 2. Klawiatura działa równolegle, więc można grać też bez padów.
 
 ## Jak się gra
 
@@ -63,4 +84,4 @@ Wynik jest wspólny i to on decyduje o ocenie babci (od „Głodni pójdą…”
 
 ## Technologia
 
-Czysty HTML + JavaScript: Canvas 2D, Gamepad API i Web Audio. Bez zależności i bez kroku budowania.
+Czysty HTML + JavaScript: Canvas 2D, Gamepad API i Web Audio, bez kroku budowania. Tryb online używa WebRTC przez bibliotekę [PeerJS](https://peerjs.com/) 1.5.5 (licencja MIT), dołączoną do repozytorium jako `peerjs.min.js`.
