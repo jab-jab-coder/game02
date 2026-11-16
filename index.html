@@ -75,7 +75,8 @@ const CAT_DOOR = { x: 640, y: 128 };
 const UNCLE_DOOR = { x: 1010, y: 622 };
 
 // pies: kapsuła (odcinek o połowie długości DOG_HALF i promieniu DOG_R), której gracze nie przejdą
-const DOG_HALF = 46, DOG_R = 30, PLAYER_R = 26, DOG_SPEED = 150;
+const DOG_HALF = 22, DOG_R = 14, PLAYER_R = 26, DOG_SPEED = 150;
+const DOG_SCALE = 0.5;           // rysunek psa jest zrobiony w dużej skali i pomniejszany
 // miejsca w przejściach; a = kąt ułożenia psa (w poprzek trasy)
 const DOG_SPOTS = [
   { x: 1010, y: 375, a: Math.PI / 2, name: 'garnek–stół' },
@@ -115,9 +116,9 @@ const GRANNY = {
   uncle:   ['Zbyszek! To dla gości!', 'Wujka omijać szerokim łukiem!'],
   uncleIn: ['O, Zbyszek przyszedł „tylko spróbować”…'],
   steal:   ['Nie bijcie się, dla każdego starczy!', 'Ej! Współpraca, a nie podbieranie!'],
-  dogIn:   ['Rudy! Tylko nie kładź się w przejściu!', 'O, Rudy przyszedł pilnować pierogów.'],
-  dogLie:  ['No i się położył. W samym przejściu.', 'Rudy, serio? Akurat tutaj?', 'Psa się nie przestawia, psa się omija.'],
-  dogMove: ['Rudy wstaje! Ciekawe, gdzie teraz legnie.', 'Uwaga, pies zmienia miejscówkę!'],
+  dogIn:   ['Nora! Tylko nie kładź się w przejściu!', 'O, Nora przyszła pilnować pierogów.'],
+  dogLie:  ['No i się położyła. W samym przejściu.', 'Nora, serio? Akurat tutaj?', 'Psa się nie przestawia, psa się omija.'],
+  dogMove: ['Nora wstaje! Ciekawe, gdzie teraz legnie.', 'Uwaga, Nora zmienia miejscówkę!'],
   flour:   ['Uwaga, mąka na podłodze!', 'Ślisko jak na lodowisku!'],
   slip:    ['Powoli, bo się zabijesz!'],
   trick:   ['Rzut za trzy! Ale w domu się nie rzuca.'],
@@ -1460,64 +1461,92 @@ function drawTable() {
   txt('× ' + S.stats.served, x, y - 72, 20, '#fff', 'center', '#3a2616');
 }
 
+// Nora: złocistoruda sierść, ciemne uszy i maska, siwy pysk, białe łapy, puszysty ogon z jasnym końcem
+const NORA = { coat: '#cf8a3e', light: '#e3b877', dark: '#a8662a', ear: '#3a2a22', mask: '#4d3d33', grey: '#d2cbc2', paw: '#f6f1e8', tail: '#ecd3a4', collar: '#e0558a' };
+
 function drawDog() {
   const d = S.dog;
   if (d.state === 'away') return;
-  const t = S.t, lying = d.state === 'lying';
+  const t = S.t, lying = d.state === 'lying', C = NORA;
   const el = (x, y, rx, ry, rot) => { ctx.beginPath(); ctx.ellipse(x, y, rx, ry, rot || 0, 0, Math.PI * 2); };
-  const step = lying ? 0 : Math.sin(t * 12), breath = lying ? 1 + Math.sin(t * 2) * 0.035 : 1;
+  const limb = (x1, y1, x2, y2, w, col) => { ctx.strokeStyle = col; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); };
   ctx.save();
-  ctx.translate(d.x, d.y); ctx.rotate(d.a);
-  // cień
-  ctx.fillStyle = 'rgba(0,0,0,0.22)'; el(2, 7, 78, 38); ctx.fill();
-  // ogon (w marszu merda, na leżąco zawinięty)
-  const wag = lying ? 1 : Math.sin(t * 14);
-  ctx.lineCap = 'round'; ctx.strokeStyle = '#b9571a'; ctx.lineWidth = 13;
-  ctx.beginPath(); ctx.moveTo(-50, 0);
-  if (lying) ctx.quadraticCurveTo(-84, 6, -66, 30); else ctx.quadraticCurveTo(-74, wag * 10, -86, wag * 22);
-  ctx.stroke();
-  ctx.fillStyle = '#fbe3c0'; el(lying ? -66 : -86, lying ? 30 : wag * 22, 6, 6); ctx.fill();
-  ctx.lineCap = 'butt';
-  // łapy
-  [[40, -24, 1], [40, 24, -1], [-40, -26, -1], [-40, 26, 1]].forEach(([px, py, ph]) => {
-    const ox = lying ? (px > 0 ? 14 : -10) : step * ph * 9;
-    ctx.fillStyle = '#c4611c'; el(px + ox, py, 15, 10); ctx.fill();
-    ctx.fillStyle = '#fbe3c0'; el(px + ox + (px > 0 || !lying ? 9 : -9), py, 6, 7); ctx.fill();
-  });
-  // tułów
-  const bg = ctx.createRadialGradient(-8, -10, 6, 0, 0, 62);
-  bg.addColorStop(0, '#f6a04a'); bg.addColorStop(1, '#cf6a1f');
-  ctx.fillStyle = bg; el(-2, 0, 58, 31 * breath); ctx.fill();
-  ctx.strokeStyle = '#9c4a14'; ctx.lineWidth = 2; ctx.stroke();
-  ctx.fillStyle = 'rgba(255,214,160,0.35)'; el(-10, 0, 34, 15); ctx.fill();
-  // uszy i głowa
-  ctx.fillStyle = '#9c4a14';
-  el(48, -21, 13, 9, -0.5); ctx.fill(); el(48, 21, 13, 9, 0.5); ctx.fill();
-  const hg = ctx.createRadialGradient(52, -6, 4, 56, 0, 26);
-  hg.addColorStop(0, '#f6a04a'); hg.addColorStop(1, '#d9772b');
-  ctx.fillStyle = hg; el(56, 0, 24, 23); ctx.fill();
-  ctx.strokeStyle = '#9c4a14'; ctx.lineWidth = 2; ctx.stroke();
-  // pysk i nos
-  ctx.fillStyle = '#fbe3c0'; el(73, 0, 13, 11); ctx.fill();
-  ctx.fillStyle = '#2a1a10'; el(84, 0, 5, 4.5); ctx.fill();
-  // oczy: na leżąco zamknięte
-  ctx.strokeStyle = '#2a1a10'; ctx.fillStyle = '#2a1a10'; ctx.lineWidth = 2.2; ctx.lineCap = 'round';
-  [-9, 9].forEach(ey => {
-    if (lying) { ctx.beginPath(); ctx.moveTo(62, ey - 3.5); ctx.quadraticCurveTo(65, ey, 62, ey + 3.5); ctx.stroke(); }
-    else { el(63, ey, 3, 3); ctx.fill(); }
-  });
-  ctx.lineCap = 'butt';
+  ctx.translate(d.x, d.y); ctx.rotate(d.a); ctx.scale(DOG_SCALE, DOG_SCALE);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+  if (lying) {
+    // śpi na boku: wszystkie łapy wyciągnięte w jedną stronę, ogon z tyłu
+    const breath = 1 + Math.sin(t * 2) * 0.03;
+    ctx.fillStyle = 'rgba(0,0,0,0.2)'; el(0, 14, 84, 46); ctx.fill();
+    // ogon
+    ctx.strokeStyle = C.coat; ctx.lineWidth = 20;
+    ctx.beginPath(); ctx.moveTo(-48, 2); ctx.quadraticCurveTo(-80, 0, -104, 16); ctx.stroke();
+    ctx.strokeStyle = C.tail; ctx.lineWidth = 11;
+    ctx.beginPath(); ctx.moveTo(-78, 6); ctx.quadraticCurveTo(-92, 9, -104, 16); ctx.stroke();
+    // tylne i przednie łapy z białymi skarpetkami
+    [[-36, 16, -14, 52], [-22, 18, 8, 60], [28, 16, 46, 54], [38, 12, 66, 44]].forEach(([x1, y1, x2, y2]) => {
+      limb(x1, y1, x2, y2, 15, C.dark);
+      limb(x1, y1, x2, y2, 12, C.coat);
+      const k = 0.72;
+      limb(x1 + (x2 - x1) * k, y1 + (y2 - y1) * k, x2, y2, 12, C.paw);
+    });
+    // tułów
+    const bg = ctx.createRadialGradient(-10, -12, 6, 0, 0, 62);
+    bg.addColorStop(0, C.light); bg.addColorStop(0.55, C.coat); bg.addColorStop(1, C.dark);
+    ctx.fillStyle = bg; el(-4, 0, 56, 30 * breath); ctx.fill();
+    ctx.strokeStyle = C.dark; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = 'rgba(246,226,186,0.55)'; el(6, 17, 30, 8); ctx.fill();   // jaśniejszy brzuch
+    // głowa leży w linii tułowia
+    ctx.fillStyle = C.coat; el(58, -4, 23, 21); ctx.fill();
+    ctx.strokeStyle = C.dark; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = C.ear; el(48, -18, 15, 10, -0.4); ctx.fill();
+    ctx.fillStyle = C.mask; el(73, -2, 14, 12); ctx.fill();
+    ctx.fillStyle = C.grey; el(79, 1, 8, 8); ctx.fill();
+    ctx.fillStyle = '#1e1410'; el(86, -2, 5, 4.5); ctx.fill();
+    ctx.strokeStyle = '#1e1410'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(61, -11); ctx.quadraticCurveTo(65, -8, 62, -4); ctx.stroke();   // zamknięte oko
+  } else {
+    // idzie: widok z góry, łapy na zmianę, ogon merda
+    const step = Math.sin(t * 12), wag = Math.sin(t * 14);
+    ctx.fillStyle = 'rgba(0,0,0,0.2)'; el(2, 8, 78, 36); ctx.fill();
+    ctx.strokeStyle = C.coat; ctx.lineWidth = 20;
+    ctx.beginPath(); ctx.moveTo(-50, 0); ctx.quadraticCurveTo(-76, wag * 10, -96, wag * 24); ctx.stroke();
+    ctx.strokeStyle = C.tail; ctx.lineWidth = 11;
+    ctx.beginPath(); ctx.moveTo(-80, wag * 14); ctx.lineTo(-96, wag * 24); ctx.stroke();
+    [[36, -24, 1], [36, 24, -1], [-38, -25, -1], [-38, 25, 1]].forEach(([px, py, ph]) => {
+      const ox = step * ph * 9;
+      ctx.fillStyle = C.coat; el(px + ox, py, 15, 10); ctx.fill();
+      ctx.fillStyle = C.paw; el(px + ox + 9, py, 7, 8); ctx.fill();
+    });
+    const bg = ctx.createRadialGradient(-8, -8, 6, 0, 0, 60);
+    bg.addColorStop(0, C.light); bg.addColorStop(0.55, C.coat); bg.addColorStop(1, C.dark);
+    ctx.fillStyle = bg; el(-4, 0, 56, 28); ctx.fill();
+    ctx.strokeStyle = C.dark; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = 'rgba(246,226,186,0.35)'; el(-12, 0, 32, 12); ctx.fill();
+    // różowa obroża
+    ctx.fillStyle = C.collar; el(38, 0, 6, 22); ctx.fill();
+    // ciemne klapnięte uszy, głowa, ciemna maska i siwy pysk
+    ctx.fillStyle = C.ear; el(50, -21, 14, 10, -0.5); ctx.fill(); el(50, 21, 14, 10, 0.5); ctx.fill();
+    ctx.fillStyle = C.coat; el(58, 0, 23, 22); ctx.fill();
+    ctx.strokeStyle = C.dark; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = C.mask; el(72, 0, 15, 13); ctx.fill();
+    ctx.fillStyle = C.mask; el(64, -9, 6, 5); ctx.fill(); el(64, 9, 6, 5); ctx.fill();
+    ctx.fillStyle = C.grey; el(79, 0, 9, 8); ctx.fill();
+    ctx.fillStyle = '#1e1410'; el(87, 0, 5, 4.5); ctx.fill();
+    ctx.fillStyle = '#c8741f'; el(64, -9, 2.8, 2.8); ctx.fill(); el(64, 9, 2.8, 2.8); ctx.fill();
+  }
   ctx.restore();
+  ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
   if (lying) {
     // chrapanie
     for (let i = 0; i < 3; i++) {
       const k = (t * 0.45 + i / 3) % 1;
       ctx.globalAlpha = 1 - k;
-      txt('z', d.x + 34 + k * 26 + i * 4, d.y - 44 - k * 34, 14 + k * 12, '#fff', 'center', '#3a2616');
+      txt('z', d.x + 14 + k * 20 + i * 3, d.y - 26 - k * 26, 12 + k * 9, '#fff', 'center', '#3a2616');
     }
     ctx.globalAlpha = 1;
   }
-  txt('Rudy', d.x, d.y + (Math.abs(Math.sin(d.a)) > 0.7 ? 0 : 50) + (Math.abs(Math.sin(d.a)) > 0.7 ? 96 : 0), 15, '#fff', 'center', '#9c4a14');
+  txt('Nora', d.x, d.y + 34 + 22 * Math.abs(Math.sin(d.a)), 14, '#fff', 'center', '#8a5220');
 }
 
 function drawActors() {
@@ -1662,7 +1691,7 @@ function drawTitle() {
     'Wujek Zbyszek zjada gotowe pierogi z rąk: −10.',
     'Garnek kipi? Szybko A przy garnku, bo się rozgotują.',
     'Mąka = poślizg. A obok partnera = podkradasz mu z rąk!',
-    'Rudy pies leży w przejściu. Nie przejdziesz, trzeba go obejść.',
+    'Suczka Nora śpi w przejściu. Nie przejdziesz, trzeba ją obejść.',
   ];
   tips.forEach((s, i) => txt('• ' + s, 660, 214 + i * 34, 18, '#f1e2c4', 'left'));
 

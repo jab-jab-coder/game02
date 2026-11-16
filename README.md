@@ -79,7 +79,7 @@ Wynik jest wspólny i to on decyduje o ocenie babci (od „Głodni pójdą…”
 - **Trzeci kot** wchodzi tymi samymi drzwiami i chodzi na zmianę: raz do farszu, raz do garnka. Przegania się go tak samo.
 - **Wujek Zbyszek** wchodzi dolnymi drzwiami i goni tego, kto niesie ugotowanego pieroga. Nie da się go przegonić, trzeba go omijać albo przerzucać pierogi nad nim.
 - **Kipiący garnek**: naciśnij A przy garnku w ciągu kilku sekund, inaczej wszystko się rozgotuje.
-- **Pies Rudy**: duży rudy pies wchodzi na początku rundy i kładzie się w jednym z przejść (między garnkiem a stołem, ciastem a farszem, farszem a stolnicą albo stolnicą a garnkiem). Nie da się przez niego przejść, trzeba go obejść, za to rzucane pierogi przelatują nad nim. Co 60–90 sekund (czas jest losowany) wstaje i przenosi się w inne przejście.
+- **Suczka Nora**: złocistoruda suczka z ciemnymi uszami, siwym pyskiem i białymi łapami wchodzi na początku rundy i kładzie się spać w jednym z przejść (między garnkiem a stołem, ciastem a farszem, farszem a stolnicą albo stolnicą a garnkiem). Nie da się przez nią przejść, trzeba ją obejść, za to rzucane pierogi przelatują nad nią. Co 60–90 sekund (czas jest losowany) wstaje i przenosi się w inne przejście.
 - **Mąka na podłodze**: poślizg i chwilowa utrata kontroli. Upuszczone ciasto też zostawia plamę.
 
 ## Technologia
