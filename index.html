@@ -74,6 +74,17 @@ const FLOOR = { x0: 50, y0: 120, x1: 1230, y1: 630 };
 const CAT_DOOR = { x: 640, y: 128 };
 const UNCLE_DOOR = { x: 1010, y: 622 };
 
+// pies: kapsuła (odcinek o połowie długości DOG_HALF i promieniu DOG_R), której gracze nie przejdą
+const DOG_HALF = 46, DOG_R = 30, PLAYER_R = 26, DOG_SPEED = 150;
+// miejsca w przejściach; a = kąt ułożenia psa (w poprzek trasy)
+const DOG_SPOTS = [
+  { x: 1010, y: 375, a: Math.PI / 2, name: 'garnek–stół' },
+  { x: 150,  y: 375, a: 0,           name: 'ciasto–farsz' },
+  { x: 305,  y: 505, a: Math.PI / 2, name: 'farsz–stolnica' },
+  { x: 670,  y: 302, a: Math.atan2(145, 380) + Math.PI / 2,  name: 'stolnica–garnek (góra)' },
+  { x: 670,  y: 448, a: Math.atan2(-145, 380) + Math.PI / 2, name: 'stolnica–garnek (dół)' },
+];
+
 const ST = {
   dough:  { x: 130,  y: 230, label: 'CIASTO' },
   farsz:  { x: 130,  y: 520, label: 'FARSZ WARZYWNY' },
@@ -104,6 +115,9 @@ const GRANNY = {
   uncle:   ['Zbyszek! To dla gości!', 'Wujka omijać szerokim łukiem!'],
   uncleIn: ['O, Zbyszek przyszedł „tylko spróbować”…'],
   steal:   ['Nie bijcie się, dla każdego starczy!', 'Ej! Współpraca, a nie podbieranie!'],
+  dogIn:   ['Rudy! Tylko nie kładź się w przejściu!', 'O, Rudy przyszedł pilnować pierogów.'],
+  dogLie:  ['No i się położył. W samym przejściu.', 'Rudy, serio? Akurat tutaj?', 'Psa się nie przestawia, psa się omija.'],
+  dogMove: ['Rudy wstaje! Ciekawe, gdzie teraz legnie.', 'Uwaga, pies zmienia miejscówkę!'],
   flour:   ['Uwaga, mąka na podłodze!', 'Ślisko jak na lodowisku!'],
   slip:    ['Powoli, bo się zabijesz!'],
   trick:   ['Rzut za trzy! Ale w domu się nie rzuca.'],
@@ -242,6 +256,7 @@ function newGame(phase) {
     ],
     uncle: { state: 'away', x: UNCLE_DOOR.x, y: UNCLE_DOOR.y, timer: rand(30, 40), stay: 0, wx: 800, wy: 400, wt: 0 },
     flour: [], nextFlour: rand(15, 24),
+    dog: { state: 'away', x: UNCLE_DOOR.x, y: UNCLE_DOOR.y, a: -Math.PI / 2, spot: -1, timer: 0 },
     shots: [], floats: [],
     granny: { text: pick(GRANNY.title), t: 9999 },
   };
@@ -582,6 +597,56 @@ function updateUncle(dt) {
   }
 }
 
+// pies wchodzi na początku rundy, kładzie się w przejściu i co 60–90 s przenosi się w inne
+function updateDog(dt) {
+  const d = S.dog;
+  if (d.state === 'away') {
+    d.spot = Math.floor(Math.random() * DOG_SPOTS.length);
+    d.state = 'walking'; d.x = UNCLE_DOOR.x; d.y = UNCLE_DOOR.y;
+    say('dogIn');
+  } else if (d.state === 'walking') {
+    const sp = DOG_SPOTS[d.spot];
+    if (Math.hypot(sp.x - d.x, sp.y - d.y) > 1) d.a = Math.atan2(sp.y - d.y, sp.x - d.x);
+    if (moveTowards(d, sp.x, sp.y, DOG_SPEED, dt)) {
+      d.state = 'lying'; d.a = sp.a; d.timer = rand(60, 90);
+      say('dogLie');
+    }
+  } else if (d.state === 'lying') {
+    d.timer -= dt;
+    if (d.timer <= 0) {
+      let next = Math.floor(Math.random() * (DOG_SPOTS.length - 1));
+      if (next >= d.spot) next++;
+      d.spot = next; d.state = 'walking';
+      say('dogMove');
+    }
+  }
+}
+
+// leżącego psa nie da się przejść: wypychamy gracza poza kapsułę
+function dogBlock(p) {
+  const d = S.dog;
+  if (d.state !== 'lying' || p.lock) return;
+  const ax = Math.cos(d.a), ay = Math.sin(d.a);
+  const t = clamp((p.x - d.x) * ax + (p.y - d.y) * ay, -DOG_HALF, DOG_HALF);
+  const cx = d.x + ax * t, cy = d.y + ay * t;
+  let dx = p.x - cx, dy = p.y - cy, dd = Math.hypot(dx, dy);
+  const min = DOG_R + PLAYER_R;
+  if (dd >= min) return;
+  if (dd < 0.01) { dx = -ay; dy = ax; dd = 1; }
+  const nx = cx + dx / dd * min, ny = cy + dy / dd * min;
+  const qx = clamp(nx, FLOOR.x0 + PLAYER_R, FLOOR.x1 - PLAYER_R), qy = clamp(ny, FLOOR.y0 + 30, FLOOR.y1 - PLAYER_R);
+  p.x = qx; p.y = qy;
+  // pies przy ścianie: zamiast wciskać gracza w ścianę, zsuwamy go wzdłuż niej poza psa
+  if (qx !== nx) {
+    const rem = Math.sqrt(Math.max(0, min * min - (qx - cx) * (qx - cx)));
+    p.y = clamp(cy + (dy >= 0 ? rem : -rem), FLOOR.y0 + 30, FLOOR.y1 - PLAYER_R);
+  } else if (qy !== ny) {
+    const rem = Math.sqrt(Math.max(0, min * min - (qy - cy) * (qy - cy)));
+    p.x = clamp(cx + (dx >= 0 ? rem : -rem), FLOOR.x0 + PLAYER_R, FLOOR.x1 - PLAYER_R);
+  }
+  if (p.slide > 0) { p.slide = 0; p.slideCd = 1.2; }
+}
+
 function updateFlour(dt) {
   for (let i = S.flour.length - 1; i >= 0; i--) {
     S.flour[i].ttl -= dt;
@@ -642,11 +707,13 @@ function simulate(dt, inp) {
 
   S.players.forEach((p, i) => updatePlayer(p, inp[i], dt));
   separatePlayers();
+  S.players.forEach(dogBlock);
   updateShots(dt);
   updatePot(dt);
   S.cats.forEach(c => updateCat(c, dt));
   updateUncle(dt);
   updateFlour(dt);
+  updateDog(dt);
 
   if (S.time <= 0) {
     S.time = 0; S.phase = 'end'; S.endT = 0;
@@ -670,6 +737,7 @@ function snapshot() {
     pot: { items: S.pot.items.map(it => r2(it.t)), kipi: S.pot.kipi },
     cats: S.cats.map(c => ({ state: c.state, target: c.target, x: r1(c.x), y: r1(c.y) })),
     uncle: { state: S.uncle.state, x: r1(S.uncle.x), y: r1(S.uncle.y) },
+    dog: { state: S.dog.state, x: r1(S.dog.x), y: r1(S.dog.y), a: r2(S.dog.a) },
     flour: S.flour.map(f => ({ x: r1(f.x), y: r1(f.y), r: f.r, ttl: r2(f.ttl) })),
     shots: S.shots.map(s => ({ item: s.item, x: r1(s.x), y: r1(s.y), vx: r1(s.vx), vy: r1(s.vy), t: r2(s.t), life: r2(s.life), h: r1(s.h) })),
     floats: S.floats.map(f => ({ text: f.text, x: r1(f.x), y: r1(f.y), color: f.color, size: f.size, t: r2(f.t) })),
@@ -704,6 +772,7 @@ function applySnapshot(d) {
   });
   setTarget(S.uncle, d.uncle.x, d.uncle.y, S.uncle.state === 'away');
   S.uncle.state = d.uncle.state;
+  if (d.dog) { setTarget(S.dog, d.dog.x, d.dog.y, S.dog.state === 'away'); S.dog.state = d.dog.state; S.dog.a = d.dog.a; }
   S.flour = d.flour; S.shots = d.shots; S.floats = d.floats; S.granny = d.granny;
 }
 
@@ -972,7 +1041,7 @@ function guestFrame(dt) {
   if (S.phase === 'countdown') S.countdown -= dt;
   if (S.phase === 'end') S.endT += dt;
   const k = 1 - Math.exp(-dt * 18);
-  for (const o of [...S.players, ...S.cats, S.uncle]) {
+  for (const o of [...S.players, ...S.cats, S.uncle, S.dog]) {
     if (o.tx === undefined) continue;
     o.x += (o.tx - o.x) * k; o.y += (o.ty - o.y) * k;
   }
@@ -1391,6 +1460,66 @@ function drawTable() {
   txt('× ' + S.stats.served, x, y - 72, 20, '#fff', 'center', '#3a2616');
 }
 
+function drawDog() {
+  const d = S.dog;
+  if (d.state === 'away') return;
+  const t = S.t, lying = d.state === 'lying';
+  const el = (x, y, rx, ry, rot) => { ctx.beginPath(); ctx.ellipse(x, y, rx, ry, rot || 0, 0, Math.PI * 2); };
+  const step = lying ? 0 : Math.sin(t * 12), breath = lying ? 1 + Math.sin(t * 2) * 0.035 : 1;
+  ctx.save();
+  ctx.translate(d.x, d.y); ctx.rotate(d.a);
+  // cień
+  ctx.fillStyle = 'rgba(0,0,0,0.22)'; el(2, 7, 78, 38); ctx.fill();
+  // ogon (w marszu merda, na leżąco zawinięty)
+  const wag = lying ? 1 : Math.sin(t * 14);
+  ctx.lineCap = 'round'; ctx.strokeStyle = '#b9571a'; ctx.lineWidth = 13;
+  ctx.beginPath(); ctx.moveTo(-50, 0);
+  if (lying) ctx.quadraticCurveTo(-84, 6, -66, 30); else ctx.quadraticCurveTo(-74, wag * 10, -86, wag * 22);
+  ctx.stroke();
+  ctx.fillStyle = '#fbe3c0'; el(lying ? -66 : -86, lying ? 30 : wag * 22, 6, 6); ctx.fill();
+  ctx.lineCap = 'butt';
+  // łapy
+  [[40, -24, 1], [40, 24, -1], [-40, -26, -1], [-40, 26, 1]].forEach(([px, py, ph]) => {
+    const ox = lying ? (px > 0 ? 14 : -10) : step * ph * 9;
+    ctx.fillStyle = '#c4611c'; el(px + ox, py, 15, 10); ctx.fill();
+    ctx.fillStyle = '#fbe3c0'; el(px + ox + (px > 0 || !lying ? 9 : -9), py, 6, 7); ctx.fill();
+  });
+  // tułów
+  const bg = ctx.createRadialGradient(-8, -10, 6, 0, 0, 62);
+  bg.addColorStop(0, '#f6a04a'); bg.addColorStop(1, '#cf6a1f');
+  ctx.fillStyle = bg; el(-2, 0, 58, 31 * breath); ctx.fill();
+  ctx.strokeStyle = '#9c4a14'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = 'rgba(255,214,160,0.35)'; el(-10, 0, 34, 15); ctx.fill();
+  // uszy i głowa
+  ctx.fillStyle = '#9c4a14';
+  el(48, -21, 13, 9, -0.5); ctx.fill(); el(48, 21, 13, 9, 0.5); ctx.fill();
+  const hg = ctx.createRadialGradient(52, -6, 4, 56, 0, 26);
+  hg.addColorStop(0, '#f6a04a'); hg.addColorStop(1, '#d9772b');
+  ctx.fillStyle = hg; el(56, 0, 24, 23); ctx.fill();
+  ctx.strokeStyle = '#9c4a14'; ctx.lineWidth = 2; ctx.stroke();
+  // pysk i nos
+  ctx.fillStyle = '#fbe3c0'; el(73, 0, 13, 11); ctx.fill();
+  ctx.fillStyle = '#2a1a10'; el(84, 0, 5, 4.5); ctx.fill();
+  // oczy: na leżąco zamknięte
+  ctx.strokeStyle = '#2a1a10'; ctx.fillStyle = '#2a1a10'; ctx.lineWidth = 2.2; ctx.lineCap = 'round';
+  [-9, 9].forEach(ey => {
+    if (lying) { ctx.beginPath(); ctx.moveTo(62, ey - 3.5); ctx.quadraticCurveTo(65, ey, 62, ey + 3.5); ctx.stroke(); }
+    else { el(63, ey, 3, 3); ctx.fill(); }
+  });
+  ctx.lineCap = 'butt';
+  ctx.restore();
+  if (lying) {
+    // chrapanie
+    for (let i = 0; i < 3; i++) {
+      const k = (t * 0.45 + i / 3) % 1;
+      ctx.globalAlpha = 1 - k;
+      txt('z', d.x + 34 + k * 26 + i * 4, d.y - 44 - k * 34, 14 + k * 12, '#fff', 'center', '#3a2616');
+    }
+    ctx.globalAlpha = 1;
+  }
+  txt('Rudy', d.x, d.y + (Math.abs(Math.sin(d.a)) > 0.7 ? 0 : 50) + (Math.abs(Math.sin(d.a)) > 0.7 ? 96 : 0), 15, '#fff', 'center', '#9c4a14');
+}
+
 function drawActors() {
   const t = S.t;
   // mąka
@@ -1403,6 +1532,7 @@ function drawActors() {
     }
     ctx.globalAlpha = 1;
   }
+  drawDog();
   // kot
   for (const c of S.cats) {
     if (c.state === 'away') continue;
@@ -1532,6 +1662,7 @@ function drawTitle() {
     'Wujek Zbyszek zjada gotowe pierogi z rąk: −10.',
     'Garnek kipi? Szybko A przy garnku, bo się rozgotują.',
     'Mąka = poślizg. A obok partnera = podkradasz mu z rąk!',
+    'Rudy pies leży w przejściu. Nie przejdziesz, trzeba go obejść.',
   ];
   tips.forEach((s, i) => txt('• ' + s, 660, 214 + i * 34, 18, '#f1e2c4', 'left'));
 
@@ -1633,7 +1764,7 @@ function frame(now) {
 
 newGame('title');
 uiSync();
-window.__pierogi = { get S() { return S; }, update, render, keys, ST, net, snapshot, applySnapshot, netInputFrame };
+window.__pierogi = { get S() { return S; }, update, render, keys, ST, DOG_SPOTS, net, snapshot, applySnapshot, netInputFrame };
 // link z kodem pokoju = od razu dołączamy
 const linkCode = normCode(new URLSearchParams(location.search).get('pokoj'));
 if (linkCode) joinRoom(linkCode);
