@@ -66,6 +66,7 @@ const SPEED = 290;               // px/s
 const REACH = 85;                // zasięg akcji przy stacji
 const LEP_PRESSES = 12;          // ile naprzemiennych wciśnięć LB/RB
 const POT_SIZE = 3;
+const CAT_DRAIN = 2;             // punkty tracone co sekundę, gdy kot siedzi przy farszu lub garnku
 const CHARGE_SWEEP = 0.7;        // sekundy na jedno przejście wskaźnika siły
 const THROW_MIN = 90, THROW_MAX = 700, THROW_SPEED = 600;
 const COOK_MIN = 4, PERFECT_FROM = 5.5, PERFECT_TO = 7.5, COOK_OVER = 10;
@@ -75,7 +76,7 @@ const UNCLE_DOOR = { x: 1010, y: 622 };
 
 const ST = {
   dough:  { x: 130,  y: 230, label: 'CIASTO' },
-  farsz:  { x: 130,  y: 520, label: 'FARSZ' },
+  farsz:  { x: 130,  y: 520, label: 'FARSZ WARZYWNY' },
   board1: { x: 480,  y: 230, label: 'STOLNICA' },
   board2: { x: 480,  y: 520, label: 'STOLNICA' },
   pot:    { x: 860,  y: 375, label: 'GARNEK' },
@@ -220,14 +221,14 @@ function mkPlayer(i) {
 
 // kot: targets = kolejne cele wizyt (na zmianę), gap = przerwa między wizytami, dy = przesunięcie miejsca
 function mkCat(face, size, targets, timer, gap, dy) {
-  return { face, size, targets, visit: 0, target: targets[0], gap, dy, state: 'away', x: CAT_DOOR.x, y: CAT_DOOR.y, timer, eatT: 0 };
+  return { face, size, targets, visit: 0, target: targets[0], gap, dy, state: 'away', x: CAT_DOOR.x, y: CAT_DOOR.y, timer, eatT: 0, drainT: 0 };
 }
 
 function newGame(phase) {
   S = {
     phase: phase || 'title', t: 0, time: ROUND_TIME, countdown: 3, endT: 0,
     score: 0, streak: 0, lastWarned: false, idleT: rand(14, 22),
-    stats: { served: 0, perfect: 0, dropped: 0, over: 0, cat: 0, potCat: 0, uncle: 0, stolen: 0 },
+    stats: { served: 0, perfect: 0, dropped: 0, over: 0, catPts: 0, potCat: 0, uncle: 0, stolen: 0 },
     players: [mkPlayer(0), mkPlayer(1)],
     boards: [
       { st: ST.board1, user: null, progress: 0, next: null },
@@ -524,17 +525,23 @@ function updateCat(c, dt) {
       c.state = 'coming'; c.x = CAT_DOOR.x; c.y = CAT_DOOR.y;
     }
   } else if (c.state === 'coming') {
-    if (moveTowards(c, tx, ty, 125, dt)) { c.state = 'eating'; c.eatT = 2.5; say(atPot ? 'cat2' : 'cat'); }
+    if (moveTowards(c, tx, ty, 125, dt)) { c.state = 'eating'; c.eatT = 2.5; c.drainT = 0; say(atPot ? 'cat2' : 'cat'); }
   } else if (c.state === 'eating') {
+    // punkty lecą od pierwszej chwili, niezależnie od tego, czy w garnku są pierogi, czy sama woda
+    c.drainT -= dt;
+    if (c.drainT <= 0) {
+      c.drainT += 1;
+      S.score -= CAT_DRAIN; S.stats.catPts += CAT_DRAIN; S.streak = 0;
+      float('−' + CAT_DRAIN, c.x + 26, c.y - 30, '#ff5a4d', 24);
+      beep(170, 0.07, 'sawtooth', 0.04);
+    }
+    // kot przy garnku dodatkowo co jakiś czas wyławia pieroga
     c.eatT -= dt;
     if (c.eatT <= 0) {
       c.eatT = 6;
-      if (!atPot) {
-        S.stats.cat++;
-        penalty(10, null, 'Kot zjadł farsz!', c.x + 20, c.y - 50);
-      } else if (S.pot.items.length) {
+      if (atPot && S.pot.items.length) {
         S.pot.items.shift(); S.stats.potCat++;
-        penalty(10, null, 'Kot wyłowił pieroga!', c.x, c.y - 50);
+        float('Kot wyłowił pieroga!', c.x, c.y - 58, '#ff5a4d', 22);
       }
     }
   } else if (c.state === 'fleeing') {
@@ -1049,34 +1056,83 @@ function emoji(s, x, y, size) {
   ctx.fillText(s, x, y);
 }
 
-function drawPierog(x, y, r, fill, edge) {
-  ctx.fillStyle = fill; ctx.strokeStyle = edge; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.arc(x, y + r * 0.35, r, Math.PI, 0); ctx.closePath();
-  ctx.fill(); ctx.stroke();
-  ctx.fillStyle = edge;
-  for (let i = 0; i <= 6; i++) {
-    const a = Math.PI + (Math.PI * i) / 6;
-    ctx.beginPath(); ctx.arc(x + Math.cos(a) * r, y + r * 0.35 + Math.sin(a) * r, r * 0.13, 0, Math.PI * 2); ctx.fill();
+// kolory pieroga: [jasny, podstawowy, brzeg]
+const PIEROG = {
+  raw:     ['#fffdf6', '#f1e4c3', '#c5b185'],
+  ok:      ['#fff3cf', '#eac176', '#ab7a30'],
+  perfect: ['#fff6bf', '#f6c443', '#b07a16'],
+  over:    ['#b9ad98', '#8d8170', '#5d5345'],
+};
+
+function drawPierog(x, y, r, kind) {
+  const [light, base, edge] = PIEROG[kind] || PIEROG.ok;
+  const cy = y + r * 0.35;
+  // cień
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.beginPath(); ctx.ellipse(x + 1, cy + r * 0.16, r * 1.05, r * 0.3, 0, 0, Math.PI * 2); ctx.fill();
+  // falbanka
+  ctx.fillStyle = base; ctx.strokeStyle = edge; ctx.lineWidth = Math.max(1, r * 0.08);
+  for (let i = 0; i <= 8; i++) {
+    const a = Math.PI + (Math.PI * i) / 8;
+    ctx.beginPath(); ctx.arc(x + Math.cos(a) * r, cy + Math.sin(a) * r, r * 0.17, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
   }
+  // brzuszek
+  const g = ctx.createLinearGradient(0, cy - r, 0, cy + r * 0.25);
+  g.addColorStop(0, light); g.addColorStop(1, base);
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(x, cy, r * 0.97, Math.PI, 0);
+  ctx.quadraticCurveTo(x, cy + r * 0.34, x - r * 0.97, cy);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  // szew wzdłuż falbanki i połysk
+  ctx.strokeStyle = edge; ctx.globalAlpha *= 0.45; ctx.lineWidth = Math.max(1, r * 0.07);
+  ctx.beginPath(); ctx.arc(x, cy, r * 0.74, Math.PI * 1.08, Math.PI * 1.92); ctx.stroke();
+  ctx.globalAlpha /= 0.45;
+  ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = Math.max(1, r * 0.12); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(x, cy, r * 0.5, Math.PI * 1.15, Math.PI * 1.4); ctx.stroke();
+  ctx.lineCap = 'butt';
+}
+
+function drawSparkle(x, y, r) {
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.moveTo(x, y - r); ctx.quadraticCurveTo(x, y, x + r, y); ctx.quadraticCurveTo(x, y, x, y + r);
+  ctx.quadraticCurveTo(x, y, x - r, y); ctx.quadraticCurveTo(x, y, x, y - r);
+  ctx.fill();
 }
 
 function drawItem(item, x, y, scale) {
   const k = scale || 1;
   if (item.type === 'dough' || item.type === 'filled') {
-    ctx.fillStyle = '#f4e6c3'; ctx.strokeStyle = '#c9b383'; ctx.lineWidth = 2;
+    // krążek ciasta
+    ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.beginPath(); ctx.ellipse(x + 1, y + 3 * k, 16 * k, 14 * k, 0, 0, Math.PI * 2); ctx.fill();
+    const g = ctx.createRadialGradient(x - 5 * k, y - 5 * k, 2 * k, x, y, 16 * k);
+    g.addColorStop(0, '#fffaf0'); g.addColorStop(1, '#ecdcb4');
+    ctx.fillStyle = g; ctx.strokeStyle = '#c5b185'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.arc(x, y, 15 * k, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     if (item.type === 'filled') {
-      ctx.fillStyle = '#8a5a34';
-      ctx.beginPath(); ctx.arc(x, y, 7 * k, 0, Math.PI * 2); ctx.fill();
+      // kopczyk warzywnego farszu
+      ctx.fillStyle = '#6f9a45'; ctx.strokeStyle = '#4c7030'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(x, y, 8 * k, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#f28c28'; ctx.beginPath(); ctx.arc(x - 3 * k, y - 2 * k, 2.4 * k, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#d93a2b'; ctx.beginPath(); ctx.arc(x + 3 * k, y + 2 * k, 2 * k, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#e9d9b8'; ctx.beginPath(); ctx.arc(x + 2 * k, y - 4 * k, 2 * k, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#b6e07a'; ctx.beginPath(); ctx.arc(x - 3 * k, y + 4 * k, 1.8 * k, 0, Math.PI * 2); ctx.fill();
     }
   } else if (item.type === 'raw') {
-    drawPierog(x, y, 16 * k, '#f6ecd2', '#cdbb90');
+    drawPierog(x, y, 16 * k, 'raw');
   } else {
-    if (item.q === 'perfect') {
+    const perfect = item.q === 'perfect';
+    if (perfect) {
       ctx.fillStyle = 'rgba(255,213,74,0.35)';
-      ctx.beginPath(); ctx.arc(x, y, 24 * k, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x, y, 25 * k, 0, Math.PI * 2); ctx.fill();
     }
-    drawPierog(x, y, 16 * k, item.q === 'perfect' ? '#ffd76a' : '#f0cf8a', '#b98a3c');
+    drawPierog(x, y, 16 * k, perfect ? 'perfect' : 'ok');
+    // zieleninka i przysmażona cebulka na wierzchu
+    const cy = y + 16 * k * 0.35;
+    [[-5, -8, '#5f9a3a'], [3, -11, '#c9772b'], [7, -6, '#5f9a3a'], [-1, -5, '#c9772b']].forEach(([dx, dy, col]) => {
+      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x + dx * k, cy + dy * k, 1.5 * k, 0, Math.PI * 2); ctx.fill();
+    });
+    if (perfect) { drawSparkle(x + 15 * k, y - 12 * k, 6 * k); drawSparkle(x - 16 * k, y - 4 * k, 4 * k); }
   }
 }
 
@@ -1115,18 +1171,69 @@ function drawStations() {
   [[-14, 8], [14, 8], [0, -10]].forEach(([dx, dy]) => {
     ctx.beginPath(); ctx.arc(ST.dough.x + dx, ST.dough.y + dy, 20, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
   });
-  // farsz
-  drawCounter(ST.farsz, '#b98652');
-  ctx.fillStyle = '#dfe6ee'; ctx.beginPath(); ctx.arc(ST.farsz.x, ST.farsz.y, 40, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = '#8fa0b3'; ctx.lineWidth = 3; ctx.stroke();
-  ctx.fillStyle = '#8a5a34'; ctx.beginPath(); ctx.arc(ST.farsz.x, ST.farsz.y, 30, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#a8713f';
-  [[-10, -8], [9, 6], [-4, 12], [12, -12]].forEach(([dx, dy]) => {
-    ctx.beginPath(); ctx.arc(ST.farsz.x + dx, ST.farsz.y + dy, 5, 0, Math.PI * 2); ctx.fill();
-  });
+  drawFarsz();
   for (const b of S.boards) drawBoard(b);
   drawPot();
   drawTable();
+}
+
+function drawFarsz() {
+  const x = ST.farsz.x, y = ST.farsz.y;
+  drawCounter(ST.farsz, '#b98652');
+  // drewniana łyżka (pod miską wystaje trzonek)
+  ctx.strokeStyle = '#8a5a2b'; ctx.lineWidth = 7; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x + 14, y - 14); ctx.lineTo(x + 47, y - 47); ctx.stroke();
+  ctx.strokeStyle = '#c98d4f'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(x + 14, y - 14); ctx.lineTo(x + 47, y - 47); ctx.stroke();
+  ctx.lineCap = 'butt';
+  // ceramiczna miska z niebieskim paskiem
+  ctx.fillStyle = 'rgba(0,0,0,0.28)'; ctx.beginPath(); ctx.arc(x + 2, y + 4, 42, 0, Math.PI * 2); ctx.fill();
+  const bg = ctx.createRadialGradient(x - 14, y - 14, 6, x, y, 44);
+  bg.addColorStop(0, '#fffdf7'); bg.addColorStop(1, '#d8cdb9');
+  ctx.fillStyle = bg; ctx.beginPath(); ctx.arc(x, y, 42, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#a99d88'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.strokeStyle = '#4f7fcf'; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.arc(x, y, 38, 0, Math.PI * 2); ctx.stroke();
+  // farsz: kapusta ze szpinakiem jako baza
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x, y, 33, 0, Math.PI * 2); ctx.clip();
+  const fg = ctx.createRadialGradient(x - 8, y - 10, 4, x, y, 34);
+  fg.addColorStop(0, '#a9cc6a'); fg.addColorStop(1, '#5b8636');
+  ctx.fillStyle = fg; ctx.fillRect(x - 34, y - 34, 68, 68);
+  // paski kapusty
+  ctx.lineCap = 'round'; ctx.lineWidth = 2.5;
+  [[-22, -10, 0.5, '#d6ecaa'], [-4, -24, 2.2, '#e3f2c0'], [12, 14, 1.1, '#d6ecaa'], [-16, 16, 2.8, '#c2e08e'],
+    [18, -14, 0.2, '#e3f2c0'], [2, 2, 1.7, '#c2e08e'], [-26, 4, 1.3, '#e3f2c0'], [8, 24, 0.3, '#d6ecaa']].forEach(([dx, dy, a, col]) => {
+    ctx.strokeStyle = col;
+    ctx.beginPath(); ctx.moveTo(x + dx - Math.cos(a) * 7, y + dy - Math.sin(a) * 7);
+    ctx.quadraticCurveTo(x + dx + Math.sin(a) * 4, y + dy - Math.cos(a) * 4, x + dx + Math.cos(a) * 7, y + dy + Math.sin(a) * 7); ctx.stroke();
+  });
+  ctx.lineCap = 'butt';
+  // marchewka w kostkę
+  [[-14, -18, 0.4], [10, -6, 1.0], [-6, 12, 0.2], [20, 12, 0.7], [-24, 12, 1.2], [4, -22, 0.9]].forEach(([dx, dy, a]) => {
+    ctx.save(); ctx.translate(x + dx, y + dy); ctx.rotate(a);
+    ctx.fillStyle = '#f28c28'; rr(-4, -4, 8, 8, 2); ctx.fill();
+    ctx.strokeStyle = '#c9661a'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.restore();
+  });
+  // pieczarki
+  [[14, -20, 0.3], [-20, -2, -0.6], [2, 20, 0.9], [22, 0, -0.2]].forEach(([dx, dy, a]) => {
+    ctx.save(); ctx.translate(x + dx, y + dy); ctx.rotate(a);
+    ctx.fillStyle = '#efe3cd'; ctx.strokeStyle = '#9a7b55'; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(0, 0, 6, Math.PI, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#e3d3b6'; ctx.fillRect(-1.6, 0, 3.2, 5); ctx.strokeRect(-1.6, 0, 3.2, 5);
+    ctx.restore();
+  });
+  // papryka, groszek, kukurydza
+  ctx.fillStyle = '#d93a2b';
+  [[-8, -6], [12, 4], [-14, 22], [24, -8], [-2, -14]].forEach(([dx, dy]) => { rr(x + dx - 3, y + dy - 2, 6, 4, 1.5); ctx.fill(); });
+  ctx.fillStyle = '#7fd04a';
+  [[-2, 6], [16, 22], [-26, -10], [8, 10], [-10, 26]].forEach(([dx, dy]) => { ctx.beginPath(); ctx.arc(x + dx, y + dy, 2.8, 0, Math.PI * 2); ctx.fill(); });
+  ctx.fillStyle = '#ffd94a';
+  [[-18, 6], [6, -12], [14, 16], [-4, 28], [26, 6]].forEach(([dx, dy]) => { ctx.beginPath(); ctx.arc(x + dx, y + dy, 2.2, 0, Math.PI * 2); ctx.fill(); });
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(x, y, 33, 0, Math.PI * 2); ctx.stroke();
 }
 
 function drawBoard(b) {
@@ -1223,7 +1330,7 @@ function drawPot() {
     if (it.t > COOK_OVER) { col = '#ff5a4d'; type = 'cooked'; }
     else if (it.t >= PERFECT_FROM && it.t <= PERFECT_TO) { col = '#ffd54a'; type = 'cooked'; q = 'perfect'; }
     else if (it.t >= COOK_MIN) { col = '#7be06a'; type = 'cooked'; q = 'ok'; }
-    if (it.t > COOK_OVER) drawPierog(sx, sy, 13, '#9b8f7a', '#6b6050');
+    if (it.t > COOK_OVER) drawPierog(sx, sy, 13, 'over');
     else drawItem({ type, q }, sx, sy, 0.8);
     ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 5;
     ctx.beginPath(); ctx.arc(sx, sy, 19, 0, Math.PI * 2); ctx.stroke();
@@ -1278,7 +1385,7 @@ function drawTable() {
   const n = Math.min(S.stats.served, 9);
   for (let i = 0; i < n; i++) {
     const a = i * 2.4, r = i === 0 ? 0 : 9 + (i % 3) * 6;
-    drawPierog(x + Math.cos(a) * r, y + Math.sin(a) * r - 4, 10, '#f0cf8a', '#b98a3c');
+    drawPierog(x + Math.cos(a) * r, y + Math.sin(a) * r - 4, 10, 'ok');
   }
   txt(ST.plate.label, x, y + 72, 16, '#fff', 'center', '#3a2616');
   txt('× ' + S.stats.served, x, y - 72, 20, '#fff', 'center', '#3a2616');
@@ -1406,7 +1513,7 @@ function drawTitle() {
 
   const steps = [
     ['1', 'CIASTO', 'weź krążek ciasta (A)'],
-    ['2', 'FARSZ', 'nałóż farsz (A) – pilnuj kota!'],
+    ['2', 'FARSZ', 'nałóż farsz warzywny (A)'],
     ['3', 'STOLNICA', 'lep: na zmianę LB i RB'],
     ['4', 'GARNEK', 'wrzuć (A), wyjmij gdy pierścień złoty'],
     ['5', 'STÓŁ', 'podaj (A): +10, idealny +15'],
@@ -1421,7 +1528,7 @@ function drawTitle() {
   const tips = [
     'Trzymaj X = siła rzutu, puść = rzut. Pieróg na podłodze: −5.',
     '3 i 6 podań z rzędu bez wpadki = mnożnik x2 i x3.',
-    'Trzy koty podjadają farsz i pierogi z garnka: −10. Przegoń A.',
+    'Kot przy farszu lub garnku: −2 punkty co sekundę. Przegoń A.',
     'Wujek Zbyszek zjada gotowe pierogi z rąk: −10.',
     'Garnek kipi? Szybko A przy garnku, bo się rozgotują.',
     'Mąka = poślizg. A obok partnera = podkradasz mu z rąk!',
@@ -1474,7 +1581,7 @@ function drawEnd() {
   const rows = [
     ['Podane pierogi', st.served], ['w tym idealne', st.perfect],
     ['Na podłodze', st.dropped], ['Rozgotowane', st.over],
-    ['Farsz zjedzony przez kota', st.cat], ['Wyłowione z garnka przez kota', st.potCat], ['Zjedzone przez wujka', st.uncle],
+    ['Punkty stracone przez koty', st.catPts], ['Pierogi wyłowione przez kota', st.potCat], ['Zjedzone przez wujka', st.uncle],
     ['Podkradzione partnerowi', st.stolen],
   ];
   rows.forEach((r, i) => {

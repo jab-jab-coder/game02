@@ -47,7 +47,7 @@ W grze lokalnej pierwszy wykryty pad steruje Graczem 1, drugi Graczem 2. Klawiat
 ## Jak się gra
 
 1. **Ciasto**: weź krążek ciasta.
-2. **Farsz**: nałóż farsz.
+2. **Farsz**: nałóż farsz warzywny.
 3. **Stolnica**: ulep pieroga, wciskając na zmianę LB i RB.
 4. **Garnek**: wrzuć pieroga (mieszczą się 3) i wyjmij, gdy pierścień jest zielony, a najlepiej złoty.
 5. **Stół**: podaj.
@@ -65,8 +65,7 @@ Przedmioty można rzucać do partnera, który złapie je sam, jeśli ma wolne r�
 | 6 podań z rzędu bez wpadki | mnożnik x3 |
 | Pieróg na podłodze | −5 |
 | Rozgotowany pieróg | −5 |
-| Kot dobrał się do farszu | −10 (co kilka sekund, dopóki go nie przegonisz) |
-| Kot wyłowił pieroga z garnka | −10 (co kilka sekund, dopóki go nie przegonisz) |
+| Kot siedzi przy farszu lub przy garnku (także z samą wodą) | −2 co sekundę, od chwili dojścia aż do przegonienia |
 | Wujek Zbyszek zjadł pieroga z rąk | −10 |
 
 Każda wpadka zeruje combo.
@@ -76,7 +75,7 @@ Wynik jest wspólny i to on decyduje o ocenie babci (od „Głodni pójdą…”
 ## Przeszkadzajki
 
 - **Kot Mruczek** wchodzi górnymi drzwiami i idzie do farszu. Przegoń go przyciskiem A.
-- **Kot Filemon** wchodzi tymi samymi drzwiami i idzie do garnka, z którego wyławia pierogi. Przegania się go tak samo.
+- **Kot Filemon** wchodzi tymi samymi drzwiami i idzie do garnka. Poza zabieraniem punktów co kilka sekund wyławia z niego pieroga. Przegania się go tak samo.
 - **Trzeci kot** wchodzi tymi samymi drzwiami i chodzi na zmianę: raz do farszu, raz do garnka. Przegania się go tak samo.
 - **Wujek Zbyszek** wchodzi dolnymi drzwiami i goni tego, kto niesie ugotowanego pieroga. Nie da się go przegonić, trzeba go omijać albo przerzucać pierogi nad nim.
 - **Kipiący garnek**: naciśnij A przy garnku w ciągu kilku sekund, inaczej wszystko się rozgotuje.
